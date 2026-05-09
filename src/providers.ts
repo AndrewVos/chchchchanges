@@ -663,13 +663,8 @@ function toBitbucketPullRequestSummary(
     inboxReasons,
     filesLoaded: false,
     connectionId: workspace,
-    files: [
-      toFile("pullrequest.diff", "Bitbucket diff will load when this pull request is selected.", {
-        additions: 0,
-        deletions: 0,
-        diffUrl: bitbucketDiffUrl(repo, pull),
-      }),
-    ],
+    files: [],
+    diffUrl: bitbucketDiffUrl(repo, pull),
   };
 }
 
@@ -690,6 +685,64 @@ function toReviewFileStatus(status: string): ReviewFile["status"] {
   if (status === "removed" || status === "deleted") return "deleted";
   if (status === "renamed") return "renamed";
   return "modified";
+}
+
+function cleanDiffPath(path: string) {
+  return path.replace(/^"|"$/g, "").replace(/^a\//, "").replace(/^b\//, "");
+}
+
+function bitbucketFilePathFromHeaders(oldHeader: string | undefined, newHeader: string | undefined) {
+  const oldPath = oldHeader?.replace(/^---\s+/, "").split("\t")[0];
+  const newPath = newHeader?.replace(/^\+\+\+\s+/, "").split("\t")[0];
+  const preferred = newPath && newPath !== "/dev/null" ? newPath : oldPath;
+  return preferred && preferred !== "/dev/null" ? cleanDiffPath(preferred) : "changed-file";
+}
+
+function splitBitbucketDiff(diff: string, diffUrl: string): ReviewFile[] {
+  const lines = diff.split("\n");
+  const files: ReviewFile[] = [];
+  let currentLines: string[] = [];
+  let currentPath = "";
+  let oldHeader: string | undefined;
+  let newHeader: string | undefined;
+
+  const pushCurrent = () => {
+    if (currentLines.length === 0) return;
+    const fileDiff = currentLines.join("\n");
+    const additions = currentLines.filter((line) => line.startsWith("+") && !line.startsWith("+++")).length;
+    const deletions = currentLines.filter((line) => line.startsWith("-") && !line.startsWith("---")).length;
+    files.push(toFile(currentPath || bitbucketFilePathFromHeaders(oldHeader, newHeader), fileDiff, {
+      additions,
+      deletions,
+      diffUrl,
+    }));
+  };
+
+  for (const line of lines) {
+    if (line.startsWith("diff --git ")) {
+      pushCurrent();
+      currentLines = [line];
+      oldHeader = undefined;
+      newHeader = undefined;
+      const match = line.match(/^diff --git\s+(.+?)\s+(.+)$/);
+      currentPath = match ? cleanDiffPath(match[2]) : "";
+      continue;
+    }
+
+    if (currentLines.length === 0) {
+      currentLines = [line];
+    } else {
+      currentLines.push(line);
+    }
+    if (line.startsWith("--- ")) oldHeader = line;
+    if (line.startsWith("+++ ")) {
+      newHeader = line;
+      currentPath = bitbucketFilePathFromHeaders(oldHeader, newHeader);
+    }
+  }
+
+  pushCurrent();
+  return files.length > 0 ? files : [toFile("diff", diff || undefined, { diffUrl })];
 }
 
 async function loadGitHubPullRequests(
@@ -1302,7 +1355,7 @@ export async function loadPullRequestFiles(
   }
 
   const workingSettings = structuredClone(settings);
-  const diffUrl = pullRequest.files[0]?.diffUrl;
+  const diffUrl = pullRequest.diffUrl ?? pullRequest.files[0]?.diffUrl;
   if (!diffUrl) {
     throw new Error(`${pullRequest.provider === "github" ? "GitHub" : "Bitbucket"} file changes URL is missing for this pull request.`);
   }
@@ -1335,15 +1388,16 @@ export async function loadPullRequestFiles(
     throw new Error("Bitbucket connection is missing for this pull request.");
   }
   const diff = await fetchBitbucketText(diffUrl, connection);
-  const additions = diff.split("\n").filter((line) => line.startsWith("+") && !line.startsWith("+++")).length;
-  const deletions = diff.split("\n").filter((line) => line.startsWith("-") && !line.startsWith("---")).length;
+  const files = splitBitbucketDiff(diff, diffUrl);
+  const additions = files.reduce((sum, file) => sum + file.additions, 0);
+  const deletions = files.reduce((sum, file) => sum + file.deletions, 0);
   return {
     pullRequest: {
       ...pullRequest,
       additions,
       deletions,
       filesLoaded: true,
-      files: [toFile("pullrequest.diff", diff || undefined, { additions, deletions, diffUrl })],
+      files,
     },
     updatedSettings: JSON.stringify(workingSettings) === JSON.stringify(settings) ? undefined : workingSettings,
   };

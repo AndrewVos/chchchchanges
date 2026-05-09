@@ -28,6 +28,7 @@ export type PullRequestSummary = {
   inboxReasons?: PullRequestInboxReason[];
   files: ReviewFile[];
   filesLoaded?: boolean;
+  diffUrl?: string;
   connectionId?: string;
   isDemo?: boolean;
 };

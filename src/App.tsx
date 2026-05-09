@@ -40,9 +40,7 @@ import type {
   AccountSettings,
   DiffLine,
   ProviderKind,
-  PullRequestInboxReason,
   PullRequestSummary,
-  PullRequestViewerRole,
   ReviewComment,
   ReviewFile,
 } from "./types";
@@ -105,13 +103,6 @@ type InboxState = {
 };
 type SnoozeOption = { label: string; milliseconds: number };
 
-const inboxReasonLabels: Record<PullRequestInboxReason, string> = {
-  author: "Mine",
-  reviewer: "Review",
-  mentioned: "Mentioned",
-  watched: "Watched",
-};
-
 const snoozeOptions: SnoozeOption[] = [
   { label: "1 hour", milliseconds: 60 * 60 * 1000 },
   { label: "3 hours", milliseconds: 3 * 60 * 60 * 1000 },
@@ -120,15 +111,6 @@ const snoozeOptions: SnoozeOption[] = [
   { label: "2 weeks", milliseconds: 14 * 24 * 60 * 60 * 1000 },
   { label: "1 month", milliseconds: 30 * 24 * 60 * 60 * 1000 },
 ];
-
-function inboxReasonForRole(role: PullRequestViewerRole): PullRequestInboxReason | undefined {
-  if (role === "author" || role === "reviewer" || role === "mentioned") return role;
-  return undefined;
-}
-
-function isInboxReason(value: PullRequestInboxReason | undefined): value is PullRequestInboxReason {
-  return value !== undefined;
-}
 
 function emptyProviderProgress(): ProviderProgressState {
   return {
@@ -468,7 +450,6 @@ export function App() {
           if (refreshIdRef.current !== refreshId || items.length === 0) return;
           setPullRequests((current) => mergePullRequests(current, items));
           setSelectedPrId((current) => current || items[0]?.id || "");
-          setSelectedFilePath((current) => current || items[0]?.files[0]?.path || "");
         },
         onProgress: (progress: LoadProgress) => {
           if (refreshIdRef.current !== refreshId) return;
@@ -493,7 +474,6 @@ export function App() {
       result.errors.forEach((error) => showToast(error, "error"));
       setUsingDemo(result.usingDemo);
       setSelectedPrId((current) => current || result.pullRequests[0]?.id || "");
-      setSelectedFilePath((current) => current || result.pullRequests[0]?.files[0]?.path || "");
     } finally {
       if (refreshIdRef.current === refreshId) setIsLoading(false);
     }
@@ -842,7 +822,7 @@ export function App() {
         setPullRequests((items) =>
           items.map((item) => (item.id === result.pullRequest.id ? mergePullRequests([item], [result.pullRequest])[0] : item)),
         );
-        setSelectedFilePath(result.pullRequest.files[0]?.path ?? "");
+        setSelectedFilePath((current) => current || (result.pullRequest.files[0]?.path ?? ""));
       })
       .catch((error) => {
         if (cancelled) return;
@@ -873,14 +853,14 @@ export function App() {
   }, [selectedPr, settings]);
 
   useEffect(() => {
-    if (selectedPr && !selectedPr.files.some((file) => file.path === selectedFilePath)) {
+    if (selectedPr?.filesLoaded && !selectedPr.files.some((file) => file.path === selectedFilePath)) {
       setSelectedFilePath(selectedPr.files[0]?.path ?? "");
     }
   }, [selectedFilePath, selectedPr]);
 
   function selectPullRequest(pr: PullRequestSummary) {
     setSelectedPrId(pr.id);
-    setSelectedFilePath(pr.files[0]?.path ?? "");
+    setSelectedFilePath(pr.filesLoaded ? pr.files[0]?.path ?? "" : "");
     setActiveLineKey(null);
     setDraft("");
     setInboxState((current) => ({
@@ -904,7 +884,7 @@ export function App() {
     if (selectedPrId === pr.id) {
       const nextPr = visiblePullRequests.find((item) => item.id !== pr.id);
       setSelectedPrId(nextPr?.id ?? "");
-      setSelectedFilePath(nextPr?.files[0]?.path ?? "");
+      setSelectedFilePath(nextPr?.filesLoaded ? nextPr.files[0]?.path ?? "" : "");
     }
   }
 
@@ -1013,16 +993,13 @@ export function App() {
         <div className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-auto pr-0.5">
           {visiblePullRequests.map((pr) => {
             const unread = isPullRequestUnread(pr);
-            const reasons = pr.inboxReasons?.length
-              ? pr.inboxReasons
-              : pr.viewerRoles?.map((role) => inboxReasonForRole(role)).filter(isInboxReason);
             return (
             <article
               key={pr.id}
               role="button"
               tabIndex={0}
               className={cn(
-                "flex w-full cursor-pointer flex-col gap-2 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-3.5 text-left text-[var(--text-card)] outline-none",
+                "grid w-full cursor-pointer grid-cols-[10px_minmax(0,1fr)] gap-3 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-3.5 text-left text-[var(--text-card)] outline-none",
                 selectedPr?.id === pr.id && "border-[var(--accent)] bg-[var(--surface-4)]",
                 unread && "border-[var(--border-strong)]",
               )}
@@ -1031,56 +1008,18 @@ export function App() {
                 if (event.key === "Enter" || event.key === " ") selectPullRequest(pr);
               }}
             >
-              <span className="flex items-start justify-between gap-2">
-                <span className="flex flex-wrap items-center gap-1.5">
-                  {unread && <span className="size-2 rounded-full bg-[var(--accent)]" aria-label="Unread" />}
-                  <span className={cn("w-fit rounded-full px-2 py-[3px] text-[11px] font-bold", providerPillClasses[pr.provider])}>
-                    {providerLabel[pr.provider]}
-                  </span>
-                </span>
-                <span className="group relative">
-                  <button
-                    className="grid size-7 cursor-pointer place-items-center rounded-md border border-transparent bg-transparent text-[var(--text-muted)] hover:border-[var(--border)] hover:bg-[var(--surface-2)]"
-                    onClick={(event) => event.stopPropagation()}
-                    aria-label="Snooze pull request"
-                    title="Snooze"
-                  >
-                    <Clock3 size={14} />
-                  </button>
-                  <span className="pointer-events-none absolute right-0 top-7 z-10 hidden w-32 rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] p-1 shadow-2xl group-focus-within:pointer-events-auto group-focus-within:block group-hover:pointer-events-auto group-hover:block">
-                    {snoozeOptions.map((option) => (
-                      <button
-                        className="block w-full cursor-pointer rounded-md px-2 py-1.5 text-left text-[12px] text-[var(--text-soft)] hover:bg-[var(--surface-3)] hover:text-[var(--text)]"
-                        key={option.label}
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          snoozePullRequest(pr, option);
-                        }}
-                      >
-                        {option.label}
-                      </button>
-                    ))}
-                  </span>
-                </span>
+              <span className="flex h-full min-h-[92px] items-center justify-center">
+                {unread && <span className="size-2 rounded-full bg-[var(--accent)]" aria-label="Unread" />}
               </span>
+              <span className="flex min-w-0 flex-col gap-2">
+                <strong className={cn("min-w-0", !unread && "font-semibold text-[var(--text-soft)]")}>
+                  {pr.title}
+                </strong>
               {pr.isDemo && (
                 <span className="w-fit rounded-full border border-[var(--warning-border)] px-[7px] py-0.5 text-[11px] font-bold text-[var(--warning)]">
                   Demo
                 </span>
               )}
-              {reasons && reasons.length > 0 && (
-                <span className="flex flex-wrap gap-1">
-                  {reasons.map((reason) => (
-                    <span
-                      className="w-fit rounded-full border border-[var(--border-strong)] px-[7px] py-0.5 text-[11px] font-bold text-[var(--text-soft)]"
-                      key={`${pr.id}-${reason}`}
-                    >
-                      {inboxReasonLabels[reason]}
-                    </span>
-                  ))}
-                </span>
-              )}
-              <strong className={cn(!unread && "font-semibold text-[var(--text-soft)]")}>{pr.title}</strong>
               <span className="text-[13px] text-[var(--text-muted)]">
                 {pr.repo} #{pr.number}
               </span>
@@ -1092,6 +1031,7 @@ export function App() {
                 <span className="text-[var(--success)]">+{pr.additions}</span>
                 <span className="text-[var(--danger)]">-{pr.deletions}</span>
                 <span>{pr.comments} comments</span>
+              </span>
               </span>
             </article>
             );
@@ -1132,7 +1072,7 @@ export function App() {
       </aside>
 
       <main className="flex h-screen min-w-0 flex-col overflow-hidden p-[26px]">
-        {selectedPr && selectedFile ? (
+        {selectedPr ? (
           <>
             <header className="mb-5 flex max-h-[34vh] shrink-0 items-start justify-between gap-6 overflow-auto pr-1">
               <div>
@@ -1203,7 +1143,7 @@ export function App() {
                 </div>
                 <button className={controls.ghost}>
                   <PanelLeft size={16} />
-                  Files {selectedPr.files.length}
+                  Files {selectedPr.filesLoaded ? selectedPr.files.length : ""}
                 </button>
                 <button className={controls.success}>
                   <CheckCircle2 size={16} />
@@ -1214,36 +1154,52 @@ export function App() {
 
             <section className="grid min-h-0 flex-1 grid-cols-[280px_minmax(0,1fr)] overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--panel)] max-[1040px]:grid-cols-[220px_minmax(0,1fr)]">
               <nav className="flex min-h-0 flex-col gap-1 overflow-auto border-r border-[var(--border)] bg-[var(--surface)] p-3" aria-label="Changed files">
-                {selectedPr.files.map((file) => (
-                  <button
-                    key={file.path}
-                    className={cn(
-                      "grid cursor-pointer grid-cols-[18px_minmax(0,1fr)] gap-2 rounded-[7px] border border-transparent bg-transparent p-2.5 text-left text-[var(--text-soft)]",
-                      selectedFile.path === file.path && "border-[var(--border-active)] bg-[var(--surface-4)]",
-                    )}
-                    onClick={() => setSelectedFilePath(file.path)}
-                  >
-                    <Code2 size={15} />
-                    <span className="break-words">{file.path}</span>
-                    <span className="col-start-2 flex gap-2 text-xs">
-                      <b>+{file.additions}</b>
-                      <i className="not-italic text-[var(--danger)]">-{file.deletions}</i>
-                    </span>
-                  </button>
-                ))}
+                {!selectedPr.filesLoaded ? (
+                  <div className="flex items-center gap-2 rounded-[7px] p-2.5 text-[13px] text-[var(--text-muted)]">
+                    <Loader2 className="animate-spin text-[var(--link)]" size={15} />
+                    Loading files
+                  </div>
+                ) : (
+                  selectedPr.files.map((file) => (
+                    <button
+                      key={file.path}
+                      className={cn(
+                        "grid cursor-pointer grid-cols-[18px_minmax(0,1fr)] gap-2 rounded-[7px] border border-transparent bg-transparent p-2.5 text-left text-[var(--text-soft)]",
+                        selectedFile?.path === file.path && "border-[var(--border-active)] bg-[var(--surface-4)]",
+                      )}
+                      onClick={() => setSelectedFilePath(file.path)}
+                    >
+                      <Code2 size={15} />
+                      <span className="break-words">{file.path}</span>
+                      <span className="col-start-2 flex gap-2 text-xs">
+                        <b>+{file.additions}</b>
+                        <i className="not-italic text-[var(--danger)]">-{file.deletions}</i>
+                      </span>
+                    </button>
+                  ))
+                )}
               </nav>
 
-              <DiffViewer
-                file={selectedFile}
-                pr={selectedPr}
-                comments={comments}
-                loading={selectedFilesLoading}
-                activeLineKey={activeLineKey}
-                draft={draft}
-                onActivateLine={setActiveLineKey}
-                onDraftChange={setDraft}
-                onSubmit={addComment}
-              />
+              {selectedFile ? (
+                <DiffViewer
+                  file={selectedFile}
+                  pr={selectedPr}
+                  comments={comments}
+                  loading={selectedFilesLoading}
+                  activeLineKey={activeLineKey}
+                  draft={draft}
+                  onActivateLine={setActiveLineKey}
+                  onDraftChange={setDraft}
+                  onSubmit={addComment}
+                />
+              ) : (
+                <div className="grid min-h-0 min-w-0 place-items-center text-[var(--text-muted)]">
+                  <div className="flex items-center gap-2">
+                    <Loader2 className="animate-spin text-[var(--link)]" size={17} />
+                    Loading file changes
+                  </div>
+                </div>
+              )}
             </section>
           </>
         ) : (
