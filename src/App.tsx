@@ -1108,16 +1108,42 @@ export function App() {
         )}
       </aside>
 
-      <main className="h-screen min-w-0 overflow-hidden p-[26px]">
+      <main className="h-screen min-w-0 overflow-hidden">
         {selectedPr ? (
-          <div className="flex h-full min-w-0 flex-col overflow-auto pr-1">
-            <header className="mb-5 flex shrink-0 items-start justify-between gap-6">
-              <div>
-                <div className="flex items-center gap-1.5 text-[13px] text-[var(--text-muted)]">
-                  <span>{providerLabel[selectedPr.provider]}</span>
-                  <ChevronDown size={14} />
-                  <span>{selectedPr.repo}</span>
+          <div className="flex h-full min-w-0 flex-col">
+            <div className="flex shrink-0 items-center justify-between gap-6 border-b border-[var(--border)] px-[26px] py-4">
+              <div className="flex min-w-0 items-center gap-1.5 text-[13px] text-[var(--text-muted)]">
+                <span>{providerLabel[selectedPr.provider]}</span>
+                <ChevronDown size={14} />
+                <span className="min-w-0 truncate">{selectedPr.repo}</span>
+              </div>
+              <div className="flex shrink-0 gap-2.5">
+                <div className="group relative">
+                  <button className={controls.ghost}>
+                    <Clock3 size={16} />
+                    Snooze
+                  </button>
+                  <div className="pointer-events-none absolute right-0 top-11 z-10 hidden w-36 rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] p-1 shadow-2xl group-focus-within:pointer-events-auto group-focus-within:block group-hover:pointer-events-auto group-hover:block">
+                    {snoozeOptions.map((option) => (
+                      <button
+                        className="block w-full cursor-pointer rounded-md px-2.5 py-2 text-left text-[13px] text-[var(--text-soft)] hover:bg-[var(--surface-3)] hover:text-[var(--text)]"
+                        key={option.label}
+                        onClick={() => snoozePullRequest(selectedPr, option)}
+                      >
+                        {option.label}
+                      </button>
+                    ))}
+                  </div>
                 </div>
+                <button className={controls.success}>
+                  <CheckCircle2 size={16} />
+                  Approve
+                </button>
+              </div>
+            </div>
+
+            <div className="min-h-0 min-w-0 flex-1 overflow-auto px-[26px] py-[26px] pr-[30px]">
+              <header className="mb-5">
                 <h1 className="my-2 max-w-[920px] text-[28px] leading-[1.15] tracking-normal">
                   <a
                     className={externalLinkClasses}
@@ -1160,57 +1186,34 @@ export function App() {
                     </ReactMarkdown>
                   </div>
                 )}
-              </div>
-              <div className="flex gap-2.5">
-                <div className="group relative">
-                  <button className={controls.ghost}>
-                    <Clock3 size={16} />
-                    Snooze
-                  </button>
-                  <div className="pointer-events-none absolute right-0 top-11 z-10 hidden w-36 rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] p-1 shadow-2xl group-focus-within:pointer-events-auto group-focus-within:block group-hover:pointer-events-auto group-hover:block">
-                    {snoozeOptions.map((option) => (
-                      <button
-                        className="block w-full cursor-pointer rounded-md px-2.5 py-2 text-left text-[13px] text-[var(--text-soft)] hover:bg-[var(--surface-3)] hover:text-[var(--text)]"
-                        key={option.label}
-                        onClick={() => snoozePullRequest(selectedPr, option)}
-                      >
-                        {option.label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-                <button className={controls.success}>
-                  <CheckCircle2 size={16} />
-                  Approve
-                </button>
-              </div>
-            </header>
+              </header>
 
-            <section className="shrink-0 overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--panel)]">
-              {!selectedPr.filesLoaded ? (
-                <div className="grid min-h-[420px] min-w-0 place-items-center text-[var(--text-muted)]">
-                  <div className="flex items-center gap-2">
-                    <Loader2 className="animate-spin text-[var(--link)]" size={17} />
-                    Loading file changes
+              <section className="shrink-0 overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--panel)]">
+                {!selectedPr.filesLoaded ? (
+                  <div className="grid min-h-[420px] min-w-0 place-items-center text-[var(--text-muted)]">
+                    <div className="flex items-center gap-2">
+                      <Loader2 className="animate-spin text-[var(--link)]" size={17} />
+                      Loading file changes
+                    </div>
                   </div>
-                </div>
-              ) : (
-                <DiffStack
-                  files={selectedPr.files}
-                  pr={selectedPr}
-                  comments={comments}
-                  loading={selectedFilesLoading}
-                  activeLineKey={activeLineKey}
-                  draft={draft}
-                  onActivateLine={setActiveLineKey}
-                  onDraftChange={setDraft}
-                  onSubmit={addComment}
-                />
-              )}
-            </section>
+                ) : (
+                  <DiffStack
+                    files={selectedPr.files}
+                    pr={selectedPr}
+                    comments={comments}
+                    loading={selectedFilesLoading}
+                    activeLineKey={activeLineKey}
+                    draft={draft}
+                    onActivateLine={setActiveLineKey}
+                    onDraftChange={setDraft}
+                    onSubmit={addComment}
+                  />
+                )}
+              </section>
+            </div>
           </div>
         ) : (
-          <div className="grid min-h-[60vh] place-items-center text-center text-[var(--text-muted)]">
+          <div className="grid min-h-[60vh] place-items-center p-[26px] text-center text-[var(--text-muted)]">
             <div className="flex max-w-[360px] flex-col items-center gap-3">
               <h2 className="m-0 text-[22px] tracking-normal text-[var(--text)]">
                 {hasConnectedAccounts ? "No pull requests found" : "No accounts connected"}
