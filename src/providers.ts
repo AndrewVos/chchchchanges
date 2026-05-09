@@ -58,7 +58,8 @@ const githubNotificationPageLimit = 3;
 const bitbucketPullRequestLimit = 1_000;
 const bitbucketReviewerRepoLimit = 40;
 const bitbucketReviewerPullRequestLimit = 50;
-const bitbucketReviewerRequestConcurrency = 2;
+const bitbucketReviewerRequestConcurrency = 1;
+const bitbucketWatchedRepoLimit = 8;
 const bitbucketWatchedPullRequestLimit = 50;
 const providerRateLimitCooldownMs = 10 * 60 * 1000;
 
@@ -293,10 +294,21 @@ type GitHubSearchItem = {
 type GitHubSearchResponse = { items: GitHubSearchItem[] };
 type GitHubFile = {
   filename: string;
+  previous_filename?: string;
   status: string;
   additions: number;
   deletions: number;
   patch?: string;
+};
+type GitHubReviewComment = {
+  id: number;
+  path?: string;
+  body?: string;
+  user?: { login?: string };
+  created_at?: string;
+  line?: number | null;
+  original_line?: number | null;
+  side?: "LEFT" | "RIGHT" | string | null;
 };
 type GitHubPull = {
   number?: number;
@@ -349,6 +361,13 @@ type GitHubNotification = {
 
 type BitbucketUser = { account_id?: string; nickname?: string; username?: string; display_name?: string; uuid?: string };
 type BitbucketRepo = { slug: string; full_name: string; workspace?: { slug?: string } };
+type BitbucketComment = {
+  id: number;
+  content?: { raw?: string; html?: string };
+  user?: BitbucketUser;
+  created_on?: string;
+  inline?: { path?: string; from?: number | null; to?: number | null };
+};
 type BitbucketPull = {
   id: number;
   title: string;
@@ -558,6 +577,35 @@ async function loadGitHubPagedItems<T>(url: string, headers: HeadersInit, perPag
   return items;
 }
 
+async function loadGitHubPullRequestComments(
+  pullRequest: PullRequestSummary,
+  filesUrl: string,
+  headers: HeadersInit,
+): Promise<ReviewComment[]> {
+  const commentsUrl = filesUrl.replace(/\/files(?:\?.*)?$/, "/comments");
+  if (commentsUrl === filesUrl) return [];
+
+  const comments = await loadGitHubPagedItems<GitHubReviewComment>(commentsUrl, headers);
+  return comments.flatMap((comment) => {
+    if (!comment.path || !comment.body) return [];
+    const lineNumber = comment.line ?? comment.original_line;
+    if (!lineNumber) return [];
+    const side = comment.side === "LEFT" ? "old" : "new";
+    return [
+      {
+        id: `github-comment-${comment.id}`,
+        provider: "github" as const,
+        prId: pullRequest.id,
+        filePath: comment.path,
+        lineKey: commentLineKey(comment.path, side, lineNumber),
+        author: comment.user?.login ?? "unknown",
+        body: comment.body,
+        createdAt: comment.created_at ? formatDate(comment.created_at) : "",
+      },
+    ];
+  });
+}
+
 function formatDate(value: string) {
   return new Intl.DateTimeFormat(undefined, {
     month: "short",
@@ -565,6 +613,10 @@ function formatDate(value: string) {
     hour: "numeric",
     minute: "2-digit",
   }).format(new Date(value));
+}
+
+function commentLineKey(filePath: string, side: "old" | "new", lineNumber: number) {
+  return `${filePath}:${side}:${lineNumber}`;
 }
 
 function uniqueRoles(roles: PullRequestViewerRole[]) {
@@ -602,6 +654,7 @@ function mergePullRequestSummaries(pullRequests: PullRequestSummary[]) {
             ...pullRequest,
             files: pullRequest.filesLoaded ? pullRequest.files : current.filesLoaded ? current.files : pullRequest.files,
             filesLoaded: current.filesLoaded || pullRequest.filesLoaded,
+            commentsLoaded: current.commentsLoaded || pullRequest.commentsLoaded,
             viewerRoles: uniqueRoles([...(current.viewerRoles ?? []), ...(pullRequest.viewerRoles ?? [])]),
             inboxReasons: uniqueInboxReasons([...(current.inboxReasons ?? []), ...(pullRequest.inboxReasons ?? [])]),
           }
@@ -671,11 +724,12 @@ function toBitbucketPullRequestSummary(
 function toFile(filename: string, patch: string | undefined, file: Partial<ReviewFile> = {}): ReviewFile {
   return {
     path: filename,
+    previousPath: file.previousPath,
     language: languageFromPath(filename),
     status: file.status ?? "modified",
     additions: file.additions ?? 0,
     deletions: file.deletions ?? 0,
-    diff: patch?.startsWith("@@") ? patch : `@@ -1,1 +1,1 @@\n ${patch || "No textual diff available."}`,
+    diff: patch ?? "",
     diffUrl: file.diffUrl,
   };
 }
@@ -698,6 +752,23 @@ function bitbucketFilePathFromHeaders(oldHeader: string | undefined, newHeader: 
   return preferred && preferred !== "/dev/null" ? cleanDiffPath(preferred) : "changed-file";
 }
 
+function bitbucketTextPatch(lines: string[]) {
+  const firstHunkIndex = lines.findIndex((line) => line.startsWith("@@"));
+  return firstHunkIndex === -1 ? "" : lines.slice(firstHunkIndex).join("\n");
+}
+
+function bitbucketFileStatus(lines: string[]): ReviewFile["status"] {
+  if (lines.some((line) => line.startsWith("rename from ") || line.startsWith("rename to "))) return "renamed";
+  if (lines.some((line) => line.startsWith("new file mode "))) return "added";
+  if (lines.some((line) => line.startsWith("deleted file mode "))) return "deleted";
+  return "modified";
+}
+
+function bitbucketRenamedFrom(lines: string[]) {
+  const renameFrom = lines.find((line) => line.startsWith("rename from "))?.replace(/^rename from\s+/, "").trim();
+  return renameFrom ? cleanDiffPath(renameFrom) : undefined;
+}
+
 function splitBitbucketDiff(diff: string, diffUrl: string): ReviewFile[] {
   const lines = diff.split("\n");
   const files: ReviewFile[] = [];
@@ -708,12 +779,15 @@ function splitBitbucketDiff(diff: string, diffUrl: string): ReviewFile[] {
 
   const pushCurrent = () => {
     if (currentLines.length === 0) return;
-    const fileDiff = currentLines.join("\n");
-    const additions = currentLines.filter((line) => line.startsWith("+") && !line.startsWith("+++")).length;
-    const deletions = currentLines.filter((line) => line.startsWith("-") && !line.startsWith("---")).length;
+    const fileDiff = bitbucketTextPatch(currentLines);
+    const patchLines = fileDiff.split("\n");
+    const additions = patchLines.filter((line) => line.startsWith("+") && !line.startsWith("+++")).length;
+    const deletions = patchLines.filter((line) => line.startsWith("-") && !line.startsWith("---")).length;
     files.push(toFile(currentPath || bitbucketFilePathFromHeaders(oldHeader, newHeader), fileDiff, {
       additions,
       deletions,
+      status: bitbucketFileStatus(currentLines),
+      previousPath: bitbucketRenamedFrom(currentLines),
       diffUrl,
     }));
   };
@@ -1098,6 +1172,43 @@ async function loadBitbucketPage<T>(
   return values.slice(0, limit);
 }
 
+async function loadBitbucketPullRequestComments(
+  pullRequest: PullRequestSummary,
+  connection: BitbucketConnection,
+): Promise<ReviewComment[]> {
+  const [workspace, repoSlug] = pullRequest.repo.split("/");
+  if (!workspace || !repoSlug) return [];
+
+  const comments = await loadBitbucketPage<BitbucketComment>(
+    `https://api.bitbucket.org/2.0/repositories/${encodeURIComponent(workspace)}/${encodeURIComponent(
+      repoSlug,
+    )}/pullrequests/${pullRequest.number}/comments?pagelen=100`,
+    connection,
+    500,
+  );
+
+  return comments.flatMap((comment) => {
+    const path = comment.inline?.path;
+    const body = comment.content?.raw?.trim();
+    if (!path || !body) return [];
+    const lineNumber = comment.inline?.to ?? comment.inline?.from;
+    if (!lineNumber) return [];
+    const side = comment.inline?.to ? "new" : "old";
+    return [
+      {
+        id: `bitbucket-comment-${workspace}-${repoSlug}-${pullRequest.number}-${comment.id}`,
+        provider: "bitbucket" as const,
+        prId: pullRequest.id,
+        filePath: path,
+        lineKey: commentLineKey(path, side, lineNumber),
+        author: comment.user?.display_name ?? comment.user?.nickname ?? comment.user?.username ?? "unknown",
+        body,
+        createdAt: comment.created_on ? formatDate(comment.created_on) : "",
+      },
+    ];
+  });
+}
+
 async function loadBitbucketPullRequests(
   settings: AccountSettings,
   scope: PullRequestViewerRole,
@@ -1226,7 +1337,7 @@ async function loadBitbucketWatchedPullRequests(
 ): Promise<PullRequestSummary[]> {
   const repos = (repositorySlugs ?? (await loadBitbucketReviewerRepositories(connection, reportProgress))).slice(
     0,
-    bitbucketReviewerRepoLimit,
+    bitbucketWatchedRepoLimit,
   );
   if (repos.length === 0) return [];
 
@@ -1318,13 +1429,20 @@ async function loadBitbucketWorkspaceInboxPullRequests(
     }
   }
 
-  const [authoredPullRequests, watchedPullRequests] = await Promise.all([
-    loadBitbucketAuthoredPullRequests(connection, user, selectedUser, options, reportProgress),
+  const authoredPullRequests = await loadBitbucketAuthoredPullRequests(connection, user, selectedUser, options, reportProgress);
+  const reviewerPullRequests =
     repositorySlugs.length > 0
-      ? loadBitbucketWatchedPullRequests(connection, user, options, reportProgress, repositorySlugs)
-      : Promise.resolve([]),
-  ]);
-  return mergePullRequestSummaries([...authoredPullRequests, ...watchedPullRequests]);
+      ? await loadBitbucketReviewerPullRequests(connection, user, options, reportProgress, repositorySlugs)
+      : [];
+  let watchedPullRequests: PullRequestSummary[] = [];
+  if (repositorySlugs.length > 0 && repositorySlugs.length <= bitbucketWatchedRepoLimit) {
+    watchedPullRequests = await loadBitbucketWatchedPullRequests(connection, user, options, reportProgress, repositorySlugs);
+  } else if (repositorySlugs.length > bitbucketWatchedRepoLimit) {
+    options.onWarning?.(
+      `Skipping Bitbucket workspace-wide watched PR scan for ${connection.workspace} to avoid rate limits. Showing authored and reviewer PRs.`,
+    );
+  }
+  return mergePullRequestSummaries([...authoredPullRequests, ...reviewerPullRequests, ...watchedPullRequests]);
 }
 
 async function loadBitbucketInboxPullRequests(
@@ -1349,8 +1467,8 @@ async function loadBitbucketInboxPullRequests(
 export async function loadPullRequestFiles(
   settings: AccountSettings,
   pullRequest: PullRequestSummary,
-): Promise<{ pullRequest: PullRequestSummary; updatedSettings?: AccountSettings }> {
-  if (pullRequest.filesLoaded) {
+): Promise<{ pullRequest: PullRequestSummary; comments?: ReviewComment[]; updatedSettings?: AccountSettings }> {
+  if (pullRequest.filesLoaded && pullRequest.commentsLoaded) {
     return { pullRequest };
   }
 
@@ -1365,20 +1483,31 @@ export async function loadPullRequestFiles(
     const connection =
       connections.find((item) => item.login === pullRequest.connectionId) ?? connections[0];
     if (!connection) throw new Error("GitHub connection is missing for this pull request.");
-    const files = await loadGitHubPagedItems<GitHubFile>(diffUrl, githubHeaders(connection.token));
+    const headers = githubHeaders(connection.token);
+    const [files, comments] = await Promise.all([
+      pullRequest.filesLoaded ? Promise.resolve(undefined) : loadGitHubPagedItems<GitHubFile>(diffUrl, headers),
+      pullRequest.commentsLoaded
+        ? Promise.resolve(undefined)
+        : loadGitHubPullRequestComments(pullRequest, diffUrl, headers).catch(() => undefined),
+    ]);
     return {
       pullRequest: {
         ...pullRequest,
         filesLoaded: true,
-        files: files.map((file) =>
-          toFile(file.filename, file.patch, {
-            status: toReviewFileStatus(file.status),
-            additions: file.additions,
-            deletions: file.deletions,
-            diffUrl,
-          }),
-        ),
+        commentsLoaded: true,
+        files: files
+          ? files.map((file) =>
+              toFile(file.filename, file.patch, {
+                status: toReviewFileStatus(file.status),
+                additions: file.additions,
+                deletions: file.deletions,
+                previousPath: file.previous_filename,
+                diffUrl,
+              }),
+            )
+          : pullRequest.files,
       },
+      comments,
     };
   }
 
@@ -1387,8 +1516,13 @@ export async function loadPullRequestFiles(
   if (!connection) {
     throw new Error("Bitbucket connection is missing for this pull request.");
   }
-  const diff = await fetchBitbucketText(diffUrl, connection);
-  const files = splitBitbucketDiff(diff, diffUrl);
+  const [diff, comments] = await Promise.all([
+    pullRequest.filesLoaded ? Promise.resolve(undefined) : fetchBitbucketText(diffUrl, connection),
+    pullRequest.commentsLoaded
+      ? Promise.resolve(undefined)
+      : loadBitbucketPullRequestComments(pullRequest, connection).catch(() => undefined),
+  ]);
+  const files = diff ? splitBitbucketDiff(diff, diffUrl) : pullRequest.files;
   const additions = files.reduce((sum, file) => sum + file.additions, 0);
   const deletions = files.reduce((sum, file) => sum + file.deletions, 0);
   return {
@@ -1397,8 +1531,10 @@ export async function loadPullRequestFiles(
       additions,
       deletions,
       filesLoaded: true,
+      commentsLoaded: true,
       files,
     },
+    comments,
     updatedSettings: JSON.stringify(workingSettings) === JSON.stringify(settings) ? undefined : workingSettings,
   };
 }

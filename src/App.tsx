@@ -16,6 +16,7 @@ import {
   CircleDot,
   GitPullRequestArrow,
   Loader2,
+  MessageSquare,
   MessageSquarePlus,
   Monitor,
   Moon,
@@ -133,6 +134,7 @@ function mergePullRequests(current: PullRequestSummary[], incoming: PullRequestS
             ...pullRequest,
             files: pullRequest.filesLoaded ? pullRequest.files : existing.filesLoaded ? existing.files : pullRequest.files,
             filesLoaded: existing.filesLoaded || pullRequest.filesLoaded,
+            commentsLoaded: existing.commentsLoaded || pullRequest.commentsLoaded,
             viewerRoles: [...new Set([...(existing.viewerRoles ?? []), ...(pullRequest.viewerRoles ?? [])])],
             inboxReasons: [...new Set([...(existing.inboxReasons ?? []), ...(pullRequest.inboxReasons ?? [])])],
           }
@@ -142,6 +144,23 @@ function mergePullRequests(current: PullRequestSummary[], incoming: PullRequestS
   return [...items.values()].sort(
     (left, right) => new Date(right.updatedAtIso).getTime() - new Date(left.updatedAtIso).getTime(),
   );
+}
+
+function replaceLoadedProviderComments(
+  current: ReviewComment[],
+  prId: string,
+  provider: ProviderKind,
+  incoming: ReviewComment[],
+) {
+  const loadedCommentPrefix = `${provider}-comment-`;
+  const comments = current.filter(
+    (comment) => comment.prId !== prId || !comment.id.startsWith(loadedCommentPrefix),
+  );
+  const commentsById = new Map(comments.map((comment) => [comment.id, comment]));
+  for (const comment of incoming) {
+    commentsById.set(comment.id, comment);
+  }
+  return [...commentsById.values()];
 }
 
 function filterButtonClasses(active: boolean) {
@@ -819,7 +838,7 @@ export function App() {
   );
 
   useEffect(() => {
-    if (!selectedPr || selectedPr.filesLoaded || selectedPr.isDemo) return;
+    if (!selectedPr || (selectedPr.filesLoaded && selectedPr.commentsLoaded) || selectedPr.isDemo) return;
     if (loadingFileIdsRef.current.has(selectedPr.id) || failedFileIdsRef.current.has(selectedPr.id)) return;
 
     let cancelled = false;
@@ -832,6 +851,12 @@ export function App() {
         setPullRequests((items) =>
           items.map((item) => (item.id === result.pullRequest.id ? mergePullRequests([item], [result.pullRequest])[0] : item)),
         );
+        const loadedComments = result.comments;
+        if (loadedComments) {
+          setComments((items) =>
+            replaceLoadedProviderComments(items, result.pullRequest.id, result.pullRequest.provider, loadedComments),
+          );
+        }
       })
       .catch((error) => {
         if (cancelled) return;
@@ -994,6 +1019,8 @@ export function App() {
         <div className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-auto pr-0.5">
           {visiblePullRequests.map((pr) => {
             const unread = isPullRequestUnread(pr);
+            const loadedCommentCount = comments.filter((comment) => comment.prId === pr.id).length;
+            const commentCount = Math.max(pr.comments, loadedCommentCount);
             return (
             <article
               key={pr.id}
@@ -1027,11 +1054,17 @@ export function App() {
                 >
                   {pr.title}
                 </strong>
-              {pr.isDemo && (
-                <span className="w-fit rounded-full border border-[var(--warning-border)] px-[7px] py-0.5 text-[11px] font-bold text-[var(--warning)]">
-                  Demo
+                <span className="flex min-w-0 items-center justify-between gap-3 text-xs text-[var(--text-muted)]">
+                  <span className="inline-flex items-center gap-1.5">
+                    <MessageSquare size={13} />
+                    {commentCount}
+                  </span>
+                  {pr.isDemo && (
+                    <span className="w-fit rounded-full border border-[var(--warning-border)] px-[7px] py-0.5 text-[11px] font-bold text-[var(--warning)]">
+                      Demo
+                    </span>
+                  )}
                 </span>
-              )}
               </span>
             </article>
             );
@@ -1478,6 +1511,17 @@ type DiffStackProps = {
   loading?: boolean;
 } & Omit<DiffViewerProps, "file">;
 
+function compactRenamePath(previousPath: string, nextPath: string) {
+  const previousSlash = previousPath.lastIndexOf("/");
+  const nextSlash = nextPath.lastIndexOf("/");
+  const previousDirectory = previousSlash === -1 ? "" : previousPath.slice(0, previousSlash + 1);
+  const nextDirectory = nextSlash === -1 ? "" : nextPath.slice(0, nextSlash + 1);
+  if (previousDirectory === nextDirectory) {
+    return `${nextDirectory}{${previousPath.slice(previousSlash + 1)}->${nextPath.slice(nextSlash + 1)}}`;
+  }
+  return `${previousPath}->${nextPath}`;
+}
+
 function DiffStack({
   files,
   pr,
@@ -1526,12 +1570,20 @@ function DiffViewer({
 }: DiffViewerProps) {
   const hunks = useMemo(() => parseUnifiedDiff(file.diff), [file.diff]);
   const language = languageFromPath(file.path);
+  const compactRename = file.previousPath ? compactRenamePath(file.previousPath, file.path) : "";
+  const displayPath = file.status === "renamed" && compactRename ? compactRename : file.path;
+  const hideEmptyBody = file.status === "renamed" && hunks.length === 0;
 
   return (
     <div className="flex min-w-0 flex-col border-b border-[var(--border)] last:border-b-0">
-      <div className="flex min-h-[54px] items-center justify-between border-b border-[var(--border)] bg-[var(--panel-header)] px-4">
+      <div
+        className={cn(
+          "flex min-h-[54px] items-center justify-between bg-[var(--panel-header)] px-4",
+          !hideEmptyBody && "border-b border-[var(--border)]",
+        )}
+      >
         <div className="flex items-center gap-2.5">
-          <strong>{file.path}</strong>
+          <strong>{displayPath}</strong>
           <span className="text-[13px] text-[var(--text-muted)]">{file.status}</span>
         </div>
         <div className="flex items-center gap-2.5 text-[13px]">
@@ -1540,12 +1592,17 @@ function DiffViewer({
         </div>
       </div>
 
+      {!hideEmptyBody && (
       <div
         className="font-mono text-[13px] leading-[1.55]"
         role="table"
         aria-label={`${file.path} unified diff`}
       >
-        {hunks.map((hunk) => (
+        {hunks.length === 0 ? (
+          <div className="border-b border-[var(--border)] px-4 py-3 text-[var(--text-muted)]">
+            No textual changes to display.
+          </div>
+        ) : hunks.map((hunk) => (
           <div key={hunk.header}>
             <div className="sticky top-0 z-[2] border-b border-[var(--border)] bg-[var(--diff-header)] px-3.5 py-[7px] text-[var(--link)]">
               {hunk.header}
@@ -1627,6 +1684,7 @@ function DiffViewer({
           </div>
         ))}
       </div>
+      )}
     </div>
   );
 }

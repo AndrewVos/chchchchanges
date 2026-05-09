@@ -28,6 +28,7 @@ export type PullRequestSummary = {
   inboxReasons?: PullRequestInboxReason[];
   files: ReviewFile[];
   filesLoaded?: boolean;
+  commentsLoaded?: boolean;
   diffUrl?: string;
   connectionId?: string;
   isDemo?: boolean;
@@ -35,6 +36,7 @@ export type PullRequestSummary = {
 
 export type ReviewFile = {
   path: string;
+  previousPath?: string;
   language: string;
   status: "modified" | "added" | "deleted" | "renamed";
   additions: number;
