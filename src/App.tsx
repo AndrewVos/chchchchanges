@@ -385,7 +385,7 @@ export function App() {
                 <input
                   value={settings.bitbucketWorkspaces}
                   onChange={(event) => updateSettings({ bitbucketWorkspaces: event.target.value })}
-                  placeholder="comma,separated optional"
+                  placeholder="workspace-slug,another-workspace"
                 />
               </label>
               <button className="ghost" onClick={connectBitbucket} disabled={!oauthConfig.bitbucketClientId}>

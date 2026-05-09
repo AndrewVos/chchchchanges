@@ -237,7 +237,6 @@ type GitHubPull = {
 };
 
 type BitbucketUser = { username?: string; display_name?: string };
-type BitbucketWorkspace = { slug: string };
 type BitbucketRepo = { slug: string; full_name: string; workspace: { slug: string } };
 type BitbucketPull = {
   id: number;
@@ -381,21 +380,15 @@ async function loadBitbucketPullRequests(settings: AccountSettings): Promise<Pul
     .split(",")
     .map((item) => item.trim())
     .filter(Boolean);
-  const workspaces =
-    configuredWorkspaces.length > 0
-      ? configuredWorkspaces
-      : (
-          await loadBitbucketPage<BitbucketWorkspace>(
-            "https://api.bitbucket.org/2.0/workspaces?role=member&pagelen=50",
-            headers,
-          )
-        ).map((workspace) => workspace.slug);
+  if (configuredWorkspaces.length === 0) {
+    throw new Error("Bitbucket workspace slug required. Enter one or more workspaces, comma-separated.");
+  }
 
   const repos = (
     await Promise.all(
-      workspaces.map((workspace) =>
+      configuredWorkspaces.map((workspace) =>
         loadBitbucketPage<BitbucketRepo>(
-          `https://api.bitbucket.org/2.0/repositories/${workspace}?role=member&pagelen=50`,
+          `https://api.bitbucket.org/2.0/repositories/${workspace}?pagelen=50`,
           headers,
           50,
         ),
