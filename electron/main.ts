@@ -99,7 +99,7 @@ function createWindow() {
     height: 940,
     minWidth: 1080,
     minHeight: 720,
-    title: "Chchchchanges",
+    title: "Chchchchanges - Pull Request Review",
     backgroundColor: "#101319",
     titleBarStyle: "hiddenInset",
     webPreferences: {
