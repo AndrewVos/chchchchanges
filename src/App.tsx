@@ -95,9 +95,11 @@ const initialComments: ReviewComment[] = [
 const emptySettings: AccountSettings = {
   githubClientId: "",
   githubToken: "",
+  githubConnections: [],
   bitbucketClientId: "",
   bitbucketAccessToken: "",
   bitbucketWorkspaces: "",
+  bitbucketConnections: [],
 };
 
 const oauthConfig = {
@@ -109,7 +111,18 @@ const oauthConfig = {
 
 function loadStoredSettings(): AccountSettings {
   try {
-    return { ...emptySettings, ...JSON.parse(localStorage.getItem("reviewDesk.accounts") ?? "{}") };
+    const stored = { ...emptySettings, ...JSON.parse(localStorage.getItem("reviewDesk.accounts") ?? "{}") };
+    if (stored.githubToken && stored.githubConnections.length === 0) {
+      stored.githubConnections = [{ login: "GitHub", token: stored.githubToken }];
+    }
+    if (stored.bitbucketAccessToken && stored.bitbucketConnections.length === 0 && stored.bitbucketWorkspaces) {
+      stored.bitbucketConnections = stored.bitbucketWorkspaces
+        .split(",")
+        .map((workspace: string) => workspace.trim())
+        .filter(Boolean)
+        .map((workspace: string) => ({ workspace, token: stored.bitbucketAccessToken }));
+    }
+    return stored;
   } catch {
     return emptySettings;
   }
@@ -184,6 +197,18 @@ export function App() {
     setSettings((current) => ({ ...current, ...patch }));
   }
 
+  async function loadGitHubLogin(token: string) {
+    const response = await fetch("https://api.github.com/user", {
+      headers: {
+        Accept: "application/vnd.github+json",
+        Authorization: `Bearer ${token}`,
+      },
+    });
+    if (!response.ok) return "GitHub";
+    const user = (await response.json()) as { login?: string };
+    return user.login ?? "GitHub";
+  }
+
   async function connectGitHub() {
     try {
       const clientId = oauthConfig.githubClientId || settings.githubClientId;
@@ -206,7 +231,12 @@ export function App() {
         window.reviewDesk.getPendingGitHubCallback,
         window.reviewDesk.onGitHubCallback,
       );
-      const next = { ...settings, githubToken: token.access_token };
+      const login = await loadGitHubLogin(token.access_token);
+      const githubConnections = [
+        ...settings.githubConnections.filter((connection) => connection.login !== login),
+        { login, token: token.access_token },
+      ];
+      const next = { ...settings, githubToken: "", githubConnections };
       setSettings(next);
       setOauthStatus("GitHub connected.");
       await refreshPullRequests(next);
@@ -242,7 +272,18 @@ export function App() {
         window.reviewDesk.getPendingBitbucketCallback,
         window.reviewDesk.onBitbucketCallback,
       );
-      const next = { ...settings, bitbucketAccessToken: token.access_token };
+      const workspaces = settings.bitbucketWorkspaces
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean);
+      const existing = settings.bitbucketConnections.filter(
+        (connection) => !workspaces.includes(connection.workspace),
+      );
+      const bitbucketConnections = [
+        ...existing,
+        ...workspaces.map((workspace) => ({ workspace, token: token.access_token })),
+      ];
+      const next = { ...settings, bitbucketAccessToken: "", bitbucketConnections };
       setSettings(next);
       setOauthStatus("Bitbucket connected.");
       await refreshPullRequests(next);
@@ -251,11 +292,19 @@ export function App() {
     }
   }
 
-  async function disconnectProvider(provider: ProviderKind) {
+  async function disconnectProvider(provider: ProviderKind, id: string) {
     const next =
       provider === "github"
-        ? { ...settings, githubToken: "" }
-        : { ...settings, bitbucketAccessToken: "" };
+        ? {
+            ...settings,
+            githubToken: "",
+            githubConnections: settings.githubConnections.filter((connection) => connection.login !== id),
+          }
+        : {
+            ...settings,
+            bitbucketAccessToken: "",
+            bitbucketConnections: settings.bitbucketConnections.filter((connection) => connection.workspace !== id),
+          };
     setSettings(next);
     setOauthStatus(`${providerLabel[provider]} disconnected.`);
     await refreshPullRequests(next);
@@ -515,54 +564,64 @@ export function App() {
               <div className="provider-connect-row">
                 <div>
                   <strong>GitHub</strong>
-                  <span>{settings.githubToken ? "Connected" : "Not connected"}</span>
+                  <span>{settings.githubConnections.length} connected</span>
                 </div>
-                {settings.githubToken ? (
-                  <div className="connected-actions">
-                    <CheckSquare2 className="connected-check" size={22} />
-                    <button className="link-button disconnect" onClick={() => void disconnectProvider("github")}>
-                      Disconnect
-                    </button>
-                  </div>
-                ) : (
-                  <button
-                    className="link-button"
-                    onClick={connectGitHub}
-                    disabled={!oauthConfig.githubClientId && !oauthConfig.githubBrokerUrl}
-                  >
-                    Connect
-                  </button>
-                )}
+                <button
+                  className="link-button"
+                  onClick={connectGitHub}
+                  disabled={!oauthConfig.githubClientId && !oauthConfig.githubBrokerUrl}
+                >
+                  Connect another
+                </button>
               </div>
+              {settings.githubConnections.map((connection) => (
+                <div className="connection-chip" key={connection.login}>
+                  <span>
+                    <CheckSquare2 className="connected-check" size={18} />
+                    {connection.login}
+                  </span>
+                  <button
+                    className="link-button disconnect"
+                    onClick={() => void disconnectProvider("github", connection.login)}
+                  >
+                    Disconnect
+                  </button>
+                </div>
+              ))}
 
               <div className="provider-connect-row bitbucket-row">
                 <div>
                   <strong>Bitbucket</strong>
-                  <span>{settings.bitbucketAccessToken ? "Connected" : "Not connected"}</span>
+                  <span>{settings.bitbucketConnections.length} connected</span>
                 </div>
-                {settings.bitbucketAccessToken ? (
-                  <div className="connected-actions">
-                    <CheckSquare2 className="connected-check" size={22} />
-                    <button className="link-button disconnect" onClick={() => void disconnectProvider("bitbucket")}>
-                      Disconnect
-                    </button>
-                  </div>
-                ) : (
-                  <button
-                    className="link-button"
-                    onClick={connectBitbucket}
-                    disabled={
-                      (!oauthConfig.bitbucketClientId && !oauthConfig.bitbucketBrokerUrl) ||
-                      !settings.bitbucketWorkspaces.trim()
-                    }
-                  >
-                    Connect
-                  </button>
-                )}
+                <button
+                  className="link-button"
+                  onClick={connectBitbucket}
+                  disabled={
+                    (!oauthConfig.bitbucketClientId && !oauthConfig.bitbucketBrokerUrl) ||
+                    !settings.bitbucketWorkspaces.trim()
+                  }
+                >
+                  Connect workspace
+                </button>
               </div>
+              {settings.bitbucketConnections.map((connection) => (
+                <div className="connection-chip" key={connection.workspace}>
+                  <span>
+                    <CheckSquare2 className="connected-check" size={18} />
+                    {connection.workspace}
+                  </span>
+                  <button
+                    className="link-button disconnect"
+                    onClick={() => void disconnectProvider("bitbucket", connection.workspace)}
+                  >
+                    Disconnect
+                  </button>
+                </div>
+              ))}
 
               <label className="workspace-field">
-                Bitbucket workspace
+                Bitbucket workspace to connect
                 <input
                   value={settings.bitbucketWorkspaces}
                   onChange={(event) => updateSettings({ bitbucketWorkspaces: event.target.value })}

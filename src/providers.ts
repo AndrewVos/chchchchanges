@@ -249,11 +249,31 @@ type BitbucketPull = {
 };
 
 function hasGitHub(settings: AccountSettings) {
-  return settings.githubToken.trim().length > 0;
+  return getGitHubConnections(settings).length > 0;
 }
 
 function hasBitbucket(settings: AccountSettings) {
-  return settings.bitbucketAccessToken.trim().length > 0;
+  return getBitbucketConnections(settings).length > 0;
+}
+
+function getGitHubConnections(settings: AccountSettings) {
+  const connections = [...(settings.githubConnections ?? [])];
+  if (settings.githubToken.trim() && !connections.some((connection) => connection.token === settings.githubToken)) {
+    connections.push({ login: "GitHub", token: settings.githubToken.trim() });
+  }
+  return connections.filter((connection) => connection.token.trim());
+}
+
+function getBitbucketConnections(settings: AccountSettings) {
+  const connections = [...(settings.bitbucketConnections ?? [])];
+  if (settings.bitbucketAccessToken.trim() && settings.bitbucketWorkspaces.trim()) {
+    for (const workspace of settings.bitbucketWorkspaces.split(",").map((item) => item.trim()).filter(Boolean)) {
+      if (!connections.some((connection) => connection.workspace === workspace)) {
+        connections.push({ workspace, token: settings.bitbucketAccessToken.trim() });
+      }
+    }
+  }
+  return connections.filter((connection) => connection.workspace.trim() && connection.token.trim());
 }
 
 async function requestJson<T>(url: string, init: RequestInit): Promise<T> {
@@ -307,8 +327,14 @@ function toReviewFileStatus(status: string): ReviewFile["status"] {
 }
 
 async function loadGitHubPullRequests(settings: AccountSettings): Promise<PullRequestSummary[]> {
-  if (!hasGitHub(settings)) return [];
-  const headers = githubHeaders(settings.githubToken.trim());
+  const connections = getGitHubConnections(settings);
+  if (connections.length === 0) return [];
+  const groups = await Promise.all(connections.map((connection) => loadGitHubPullRequestsForToken(connection.token)));
+  return groups.flat();
+}
+
+async function loadGitHubPullRequestsForToken(token: string): Promise<PullRequestSummary[]> {
+  const headers = githubHeaders(token);
   const user = await requestJson<GitHubUser>("https://api.github.com/user", { headers });
   const search = await requestJson<GitHubSearchResponse>(
     `https://api.github.com/search/issues?q=${encodeURIComponent(
@@ -355,9 +381,13 @@ async function loadGitHubPullRequests(settings: AccountSettings): Promise<PullRe
 }
 
 function bitbucketHeaders(settings: AccountSettings): HeadersInit {
+  return bitbucketHeadersForToken(settings.bitbucketAccessToken.trim());
+}
+
+function bitbucketHeadersForToken(token: string): HeadersInit {
   return {
     Accept: "application/json",
-    Authorization: `Bearer ${settings.bitbucketAccessToken.trim()}`,
+    Authorization: `Bearer ${token}`,
   };
 }
 
@@ -373,28 +403,25 @@ async function loadBitbucketPage<T>(url: string, headers: HeadersInit, limit = 5
 }
 
 async function loadBitbucketPullRequests(settings: AccountSettings): Promise<PullRequestSummary[]> {
-  if (!hasBitbucket(settings)) return [];
-  const headers = bitbucketHeaders(settings);
+  const connections = getBitbucketConnections(settings);
+  if (connections.length === 0) return [];
+  const groups = await Promise.all(
+    connections.map((connection) => loadBitbucketWorkspacePullRequests(connection.workspace, connection.token)),
+  );
+  return groups.flat();
+}
+
+async function loadBitbucketWorkspacePullRequests(workspace: string, token: string): Promise<PullRequestSummary[]> {
+  const headers = bitbucketHeadersForToken(token);
   await requestJson<BitbucketUser>("https://api.bitbucket.org/2.0/user", { headers });
-  const configuredWorkspaces = settings.bitbucketWorkspaces
-    .split(",")
-    .map((item) => item.trim())
-    .filter(Boolean);
-  if (configuredWorkspaces.length === 0) {
-    throw new Error("Bitbucket workspace slug required. Enter one or more workspaces, comma-separated.");
-  }
 
   const repos = (
-    await Promise.all(
-      configuredWorkspaces.map((workspace) =>
-        loadBitbucketPage<BitbucketRepo>(
-          `https://api.bitbucket.org/2.0/repositories/${workspace}?pagelen=50`,
-          headers,
-          50,
-        ),
-      ),
+    await loadBitbucketPage<BitbucketRepo>(
+      `https://api.bitbucket.org/2.0/repositories/${workspace}?pagelen=50`,
+      headers,
+      50,
     )
-  ).flat();
+  );
 
   const openPullRequests = (
     await Promise.all(

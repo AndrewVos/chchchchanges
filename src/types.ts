@@ -44,9 +44,17 @@ export type ReviewComment = {
 export type AccountSettings = {
   githubClientId: string;
   githubToken: string;
+  githubConnections: Array<{
+    login: string;
+    token: string;
+  }>;
   bitbucketClientId: string;
   bitbucketAccessToken: string;
   bitbucketWorkspaces: string;
+  bitbucketConnections: Array<{
+    workspace: string;
+    token: string;
+  }>;
 };
 
 export type DiffLineKind = "context" | "addition" | "deletion" | "meta";
