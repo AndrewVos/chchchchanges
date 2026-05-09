@@ -784,10 +784,12 @@ function DiffViewer({
                     >
                       <MessageSquarePlus size={14} />
                     </button>
-                    <code
-                      className="code-line"
-                      dangerouslySetInnerHTML={{ __html: highlightCode(line.content, language) }}
-                    />
+                    <code className="code-line">
+                      <span className="diff-marker">
+                        {line.kind === "addition" ? "+" : line.kind === "deletion" ? "-" : " "}
+                      </span>
+                      <span dangerouslySetInnerHTML={{ __html: highlightCode(line.content, language) }} />
+                    </code>
                   </div>
 
                   {lineComments.map((comment) => (
