@@ -8,12 +8,48 @@
     "dev:renderer": "vite --host 127.0.0.1",
     "dev:electron": "wait-on http://127.0.0.1:5173 && tsc -p electron/tsconfig.json && electron .",
     "build": "tsc --noEmit && vite build && tsc -p electron/tsconfig.json",
+    "dist:mac": "bun run build && electron-builder --mac --publish never",
+    "cask:update": "bun scripts/update-homebrew-cask.mjs",
     "preview": "vite preview --host 127.0.0.1"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "type": "commonjs",
+  "build": {
+    "appId": "lol.vos.chchchchanges",
+    "productName": "Chchchchanges",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*",
+      "package.json"
+    ],
+    "protocols": [
+      {
+        "name": "Chchchchanges OAuth",
+        "schemes": [
+          "chchchchanges"
+        ]
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "universal"
+          ]
+        }
+      ]
+    },
+    "dmg": {
+      "artifactName": "${productName}-${version}-mac-${arch}.${ext}"
+    }
+  },
   "dependencies": {
     "highlight.js": "^11.11.1",
     "lucide-react": "^1.14.0",
@@ -29,6 +65,7 @@
     "@vitejs/plugin-react": "^6.0.1",
     "concurrently": "^9.2.1",
     "electron": "^42.0.0",
+    "electron-builder": "^26.8.1",
     "tailwindcss": "^4.3.0",
     "typescript": "^6.0.3",
     "vite": "^8.0.11",

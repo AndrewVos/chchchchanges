@@ -22,6 +22,12 @@ Build:
 bun run build
 ```
 
+Package a macOS DMG:
+
+```bash
+bun run dist:mac
+```
+
 ## What is included
 
 - GitHub and Bitbucket provider adapter model in `src/providers.ts`
@@ -64,3 +70,29 @@ Bitbucket Cloud requires a client secret for OAuth code exchange, so public desk
 5. Click `Connect Bitbucket`. The app opens your system browser, broker exchanges the code, then redirects back to `chchchchanges://oauth/bitbucket`.
 
 Do not ship `BITBUCKET_CLIENT_SECRET` in the desktop app.
+
+## Release
+
+Releases are built by GitHub Actions from version tags.
+
+1. Update `version` in `package.json`.
+2. Commit and push the change.
+3. Tag the commit and push the tag:
+
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+The `Release desktop app` workflow builds `release/Chchchchanges-<version>-mac-universal.dmg`, publishes it to the
+GitHub Release, calculates its SHA-256 checksum, and updates `Casks/chchchchanges.rb` on `main`.
+
+After the workflow finishes, users can install from this repository as a Homebrew tap:
+
+```bash
+brew tap AndrewVos/chchchchanges https://github.com/AndrewVos/chchchchanges
+brew install --cask chchchchanges
+```
+
+For a conventional tap command later, create `AndrewVos/homebrew-chchchchanges`, copy `Casks/chchchchanges.rb` there,
+and users can run `brew tap AndrewVos/chchchchanges`.

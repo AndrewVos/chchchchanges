@@ -1,0 +1,91 @@
+name: Release desktop app
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  macos:
+    name: Build macOS release
+    runs-on: macos-latest
+
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Validate tag matches package version
+        id: version
+        shell: bash
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
+          PACKAGE_VERSION="$(bun -e 'console.log(require("./package.json").version)')"
+
+          if [[ "$VERSION" != "$PACKAGE_VERSION" ]]; then
+            echo "Tag version $VERSION does not match package.json version $PACKAGE_VERSION" >&2
+            exit 1
+          fi
+
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Build macOS DMG
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: bun run dist:mac
+
+      - name: Locate release artifact
+        id: artifact
+        shell: bash
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          DMG="release/Chchchchanges-${VERSION}-mac-universal.dmg"
+
+          if [[ ! -f "$DMG" ]]; then
+            echo "Expected $DMG, found:" >&2
+            find release -maxdepth 2 -type f -print >&2
+            exit 1
+          fi
+
+          SHA256="$(shasum -a 256 "$DMG" | awk '{print $1}')"
+          echo "dmg=$DMG" >> "$GITHUB_OUTPUT"
+          echo "sha256=$SHA256" >> "$GITHUB_OUTPUT"
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: Chchchchanges ${{ steps.version.outputs.version }}
+          files: ${{ steps.artifact.outputs.dmg }}
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+
+      - name: Update Homebrew cask on main
+        shell: bash
+        run: |
+          git fetch origin main
+          git checkout main
+          bun run cask:update -- "${{ steps.version.outputs.version }}" "${{ steps.artifact.outputs.sha256 }}"
+
+          if git diff --quiet -- Casks/chchchchanges.rb; then
+            echo "Homebrew cask already up to date."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Casks/chchchchanges.rb
+          git commit -m "Update Homebrew cask for ${{ steps.version.outputs.tag }}"
+          git push origin main
