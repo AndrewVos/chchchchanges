@@ -251,6 +251,16 @@ export function App() {
     }
   }
 
+  async function disconnectProvider(provider: ProviderKind) {
+    const next =
+      provider === "github"
+        ? { ...settings, githubToken: "" }
+        : { ...settings, bitbucketAccessToken: "" };
+    setSettings(next);
+    setOauthStatus(`${providerLabel[provider]} disconnected.`);
+    await refreshPullRequests(next);
+  }
+
   async function waitForOAuthCallback(
     state: string,
     providerName: string,
@@ -508,7 +518,12 @@ export function App() {
                   <span>{settings.githubToken ? "Connected" : "Not connected"}</span>
                 </div>
                 {settings.githubToken ? (
-                  <CheckSquare2 className="connected-check" size={22} />
+                  <div className="connected-actions">
+                    <CheckSquare2 className="connected-check" size={22} />
+                    <button className="link-button disconnect" onClick={() => void disconnectProvider("github")}>
+                      Disconnect
+                    </button>
+                  </div>
                 ) : (
                   <button
                     className="link-button"
@@ -526,7 +541,12 @@ export function App() {
                   <span>{settings.bitbucketAccessToken ? "Connected" : "Not connected"}</span>
                 </div>
                 {settings.bitbucketAccessToken ? (
-                  <CheckSquare2 className="connected-check" size={22} />
+                  <div className="connected-actions">
+                    <CheckSquare2 className="connected-check" size={22} />
+                    <button className="link-button disconnect" onClick={() => void disconnectProvider("bitbucket")}>
+                      Disconnect
+                    </button>
+                  </div>
                 ) : (
                   <button
                     className="link-button"

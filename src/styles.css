@@ -394,6 +394,17 @@ button:disabled {
   color: #7ddf9f;
 }
 
+.provider-connect-row .connected-actions {
+  display: flex;
+  align-items: center;
+  flex-direction: row;
+  gap: 10px;
+}
+
+.link-button.disconnect {
+  color: #ffb4b4;
+}
+
 .workspace-field {
   margin-top: 4px;
 }
