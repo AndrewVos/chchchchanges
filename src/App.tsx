@@ -165,8 +165,8 @@ export function App() {
   const [activeLineKey, setActiveLineKey] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [settings, setSettings] = useState<AccountSettings>(loadStoredSettings);
-  const [connectOpen, setConnectOpen] = useState(false);
-  const [connectView, setConnectView] = useState<"list" | "github" | "bitbucket">("list");
+  const [connectMenuOpen, setConnectMenuOpen] = useState(false);
+  const [connectView, setConnectView] = useState<"github" | "bitbucket" | null>(null);
   const [loadErrors, setLoadErrors] = useState<string[]>([]);
   const [usingDemo, setUsingDemo] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
@@ -241,6 +241,7 @@ export function App() {
       setSettings(next);
       setOauthStatus("GitHub connected.");
       await refreshPullRequests(next);
+      setConnectView(null);
     } catch (error) {
       setOauthStatus(error instanceof Error ? error.message : "GitHub OAuth failed.");
     }
@@ -251,7 +252,7 @@ export function App() {
       if (!settings.bitbucketWorkspaces.trim()) {
         setOauthStatus("Bitbucket workspace is required before connecting.");
         setConnectView("bitbucket");
-        setConnectOpen(true);
+        setConnectMenuOpen(false);
         return;
       }
       const clientId = oauthConfig.bitbucketClientId || settings.bitbucketClientId;
@@ -289,6 +290,7 @@ export function App() {
       setSettings(next);
       setOauthStatus("Bitbucket connected.");
       await refreshPullRequests(next);
+      setConnectView(null);
     } catch (error) {
       setOauthStatus(error instanceof Error ? error.message : "Bitbucket OAuth failed.");
     }
@@ -486,7 +488,7 @@ export function App() {
                 </p>
               </div>
               <div className="review-actions">
-                <button className="ghost" onClick={() => { setConnectView("list"); setConnectOpen(true); }}>
+                <button className="ghost" onClick={() => setConnectMenuOpen((value) => !value)}>
                   Connect
                 </button>
                 <button className="ghost">
@@ -535,7 +537,7 @@ export function App() {
             <div>
               <h2>No accounts connected</h2>
               <p>Connect GitHub or Bitbucket to review pull requests.</p>
-              <button className="approve" onClick={() => { setConnectView("list"); setConnectOpen(true); }}>
+              <button className="approve" onClick={() => setConnectMenuOpen(true)}>
                 Connect
               </button>
             </div>
@@ -543,8 +545,69 @@ export function App() {
         )}
       </main>
 
-      {connectOpen && (
-        <div className="modal-backdrop" role="presentation" onMouseDown={() => setConnectOpen(false)}>
+      {connectMenuOpen && (
+        <div className="dropdown-layer" role="presentation" onMouseDown={() => setConnectMenuOpen(false)}>
+          <section className="connect-dropdown" onMouseDown={(event) => event.stopPropagation()}>
+            <div className="dropdown-section">
+              <strong>Connected accounts</strong>
+              {settings.githubConnections.length === 0 && settings.bitbucketConnections.length === 0 && (
+                <p>No accounts connected.</p>
+              )}
+              {settings.githubConnections.map((connection) => (
+                <div className="connection-chip compact" key={`github-${connection.login}`}>
+                  <span>
+                    <CheckSquare2 className="connected-check" size={16} />
+                    GitHub: {connection.login}
+                  </span>
+                  <button
+                    className="link-button disconnect"
+                    onClick={() => void disconnectProvider("github", connection.login)}
+                  >
+                    Disconnect
+                  </button>
+                </div>
+              ))}
+              {settings.bitbucketConnections.map((connection) => (
+                <div className="connection-chip compact" key={`bitbucket-${connection.workspace}`}>
+                  <span>
+                    <CheckSquare2 className="connected-check" size={16} />
+                    Bitbucket: {connection.workspace}
+                  </span>
+                  <button
+                    className="link-button disconnect"
+                    onClick={() => void disconnectProvider("bitbucket", connection.workspace)}
+                  >
+                    Disconnect
+                  </button>
+                </div>
+              ))}
+            </div>
+            <div className="dropdown-actions">
+              <button
+                className="link-button"
+                onClick={() => {
+                  setConnectMenuOpen(false);
+                  setConnectView("github");
+                }}
+              >
+                Connect GitHub account
+              </button>
+              <button
+                className="link-button"
+                onClick={() => {
+                  setConnectMenuOpen(false);
+                  setConnectView("bitbucket");
+                }}
+              >
+                Connect Bitbucket account
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
+
+      {connectView && (
+        <div className="modal-backdrop" role="presentation" onMouseDown={() => setConnectView(null)}>
           <section
             className="connect-modal"
             role="dialog"
@@ -555,58 +618,20 @@ export function App() {
             <header>
               <div>
                 <h2 id="connect-title">
-                  {connectView === "list" && "Connected accounts"}
                   {connectView === "github" && "Connect GitHub"}
                   {connectView === "bitbucket" && "Connect Bitbucket"}
                 </h2>
                 <p>
-                  {connectView === "list" && "Manage accounts used to load pull requests."}
                   {connectView === "github" && "Authorize a GitHub account in your browser."}
                   {connectView === "bitbucket" && "Choose a workspace, then authorize Bitbucket."}
                 </p>
               </div>
-              <button className="icon-button" onClick={() => setConnectOpen(false)} aria-label="Close">
+              <button className="icon-button" onClick={() => setConnectView(null)} aria-label="Close">
                 <X size={18} />
               </button>
             </header>
 
             <div className="provider-connect-list">
-              {connectView === "list" && (
-                <>
-                  {settings.githubConnections.length === 0 && settings.bitbucketConnections.length === 0 && (
-                    <p className="modal-empty">No accounts connected.</p>
-                  )}
-                  {settings.githubConnections.map((connection) => (
-                    <div className="connection-chip" key={`github-${connection.login}`}>
-                      <span>
-                        <CheckSquare2 className="connected-check" size={18} />
-                        GitHub: {connection.login}
-                      </span>
-                      <button
-                        className="link-button disconnect"
-                        onClick={() => void disconnectProvider("github", connection.login)}
-                      >
-                        Disconnect
-                      </button>
-                    </div>
-                  ))}
-                  {settings.bitbucketConnections.map((connection) => (
-                    <div className="connection-chip" key={`bitbucket-${connection.workspace}`}>
-                      <span>
-                        <CheckSquare2 className="connected-check" size={18} />
-                        Bitbucket: {connection.workspace}
-                      </span>
-                      <button
-                        className="link-button disconnect"
-                        onClick={() => void disconnectProvider("bitbucket", connection.workspace)}
-                      >
-                        Disconnect
-                      </button>
-                    </div>
-                  ))}
-                </>
-              )}
-
               {connectView === "github" && (
                 <div className="provider-connect-row">
                   <div>
@@ -655,20 +680,9 @@ export function App() {
             </div>
 
             <footer>
-              {connectView !== "list" ? (
-                <button className="ghost" onClick={() => setConnectView("list")}>
-                  Back
-                </button>
-              ) : (
-                <div className="connect-links">
-                  <button className="link-button" onClick={() => setConnectView("github")}>
-                    Connect GitHub
-                  </button>
-                  <button className="link-button" onClick={() => setConnectView("bitbucket")}>
-                    Connect Bitbucket
-                  </button>
-                </div>
-              )}
+              <button className="ghost" onClick={() => setConnectView(null)}>
+                Cancel
+              </button>
               <button className="ghost" onClick={() => void refreshPullRequests()}>
                 <RefreshCw size={14} />
                 {isLoading ? "Refreshing" : "Refresh"}

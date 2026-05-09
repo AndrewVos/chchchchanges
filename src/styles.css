@@ -309,6 +309,47 @@ button:disabled {
   padding: 24px;
 }
 
+.dropdown-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 19;
+}
+
+.connect-dropdown {
+  position: fixed;
+  top: 74px;
+  right: 34px;
+  display: flex;
+  width: min(420px, calc(100vw - 32px));
+  flex-direction: column;
+  gap: 10px;
+  border: 1px solid #334253;
+  border-radius: 8px;
+  background: #121923;
+  box-shadow: 0 18px 70px rgba(0, 0, 0, 0.38);
+  padding: 12px;
+}
+
+.dropdown-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.dropdown-section p {
+  margin: 0;
+  color: #91a0af;
+  font-size: 13px;
+}
+
+.dropdown-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-top: 1px solid #253241;
+  padding-top: 10px;
+}
+
 .connect-modal {
   width: min(460px, calc(100vw - 32px));
   border: 1px solid #334253;
@@ -353,14 +394,6 @@ button:disabled {
   font-size: 13px;
 }
 
-.modal-empty {
-  border: 1px solid #253241;
-  border-radius: 8px;
-  background: #0f151d;
-  padding: 16px;
-  text-align: center;
-}
-
 .icon-button {
   display: grid;
   width: 34px;
@@ -403,17 +436,18 @@ button:disabled {
   padding: 8px 12px;
 }
 
+.connection-chip.compact {
+  min-height: 34px;
+  padding: 7px 9px;
+  font-size: 13px;
+}
+
 .connection-chip span {
   display: inline-flex;
   min-width: 0;
   align-items: center;
   gap: 8px;
   overflow-wrap: anywhere;
-}
-
-.connect-links {
-  display: flex;
-  gap: 14px;
 }
 
 .provider-connect-row div,
