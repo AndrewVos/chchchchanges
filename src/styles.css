@@ -628,7 +628,27 @@ button:disabled {
   display: grid;
   min-height: 60vh;
   place-items: center;
+  text-align: center;
   color: #91a0af;
+}
+
+.empty-state div {
+  display: flex;
+  max-width: 360px;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+.empty-state h2,
+.empty-state p {
+  margin: 0;
+}
+
+.empty-state h2 {
+  color: #e7edf4;
+  font-size: 22px;
+  letter-spacing: 0;
 }
 
 @media (max-width: 1040px) {

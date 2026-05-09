@@ -467,7 +467,7 @@ export const providers: PullRequestProvider[] = [
 export async function loadAllPullRequests(settings: AccountSettings): Promise<LoadResult> {
   const hasAnyAccount = hasGitHub(settings) || hasBitbucket(settings);
   if (!hasAnyAccount) {
-    return { pullRequests: mockPullRequests, errors: [], usingDemo: true };
+    return { pullRequests: [], errors: [], usingDemo: false };
   }
 
   const settled = await Promise.allSettled(providers.map((provider) => provider.loadPullRequests(settings)));

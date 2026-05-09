@@ -373,9 +373,8 @@ export function App() {
           ))}
         </div>
 
-        {(usingDemo || loadErrors.length > 0) && (
+        {loadErrors.length > 0 && (
           <div className="notice">
-            {usingDemo && <p>Demo PRs shown until OAuth account connects.</p>}
             {loadErrors.map((error) => (
               <p key={error}>{error}</p>
             ))}
@@ -471,7 +470,15 @@ export function App() {
             </section>
           </>
         ) : (
-          <div className="empty-state">No pull requests loaded.</div>
+          <div className="empty-state">
+            <div>
+              <h2>No accounts connected</h2>
+              <p>Connect GitHub or Bitbucket to review pull requests.</p>
+              <button className="approve" onClick={() => setConnectOpen(true)}>
+                Connect
+              </button>
+            </div>
+          </div>
         )}
       </main>
 
