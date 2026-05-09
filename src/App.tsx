@@ -23,7 +23,15 @@ import { siBitbucket, siGithub } from "simple-icons";
 import { getCommentLineKey, languageFromPath, parseUnifiedDiff } from "./diff";
 import { loadAllPullRequests, providers } from "./providers";
 import { appConfig } from "./config";
-import type { AccountSettings, DiffLine, ProviderKind, PullRequestSummary, ReviewComment, ReviewFile } from "./types";
+import type {
+  AccountSettings,
+  DiffLine,
+  ProviderKind,
+  PullRequestSummary,
+  PullRequestViewerRole,
+  ReviewComment,
+  ReviewFile,
+} from "./types";
 import type { SimpleIcon } from "simple-icons";
 
 declare global {
@@ -54,6 +62,7 @@ declare global {
 type OAuthCallback = {
   state: string;
   access_token?: string;
+  refresh_token?: string;
   expires_in?: string;
   token_type?: string;
   error?: string;
@@ -69,6 +78,25 @@ hljs.registerLanguage("json", json);
 const providerLabel: Record<ProviderKind, string> = {
   github: "GitHub",
   bitbucket: "Bitbucket",
+};
+
+type PullRequestScope = "all" | "reviewer" | "author" | "assignee" | "mentioned" | "participant";
+
+const scopeFilters: Array<{ value: PullRequestScope; label: string; role?: PullRequestViewerRole }> = [
+  { value: "all", label: "All" },
+  { value: "reviewer", label: "Needs my review", role: "reviewer" },
+  { value: "author", label: "Created by me", role: "author" },
+  { value: "assignee", label: "Assigned to me", role: "assignee" },
+  { value: "mentioned", label: "Mentions me", role: "mentioned" },
+  { value: "participant", label: "Participating", role: "participant" },
+];
+
+const roleLabels: Record<PullRequestViewerRole, string> = {
+  author: "Mine",
+  reviewer: "Review",
+  assignee: "Assigned",
+  mentioned: "Mentioned",
+  participant: "Participating",
 };
 
 function cn(...classes: Array<string | false | null | undefined>) {
@@ -202,6 +230,7 @@ function stateLabel(state: PullRequestSummary["state"]) {
 export function App() {
   const [pullRequests, setPullRequests] = useState<PullRequestSummary[]>([]);
   const [selectedProvider, setSelectedProvider] = useState<ProviderKind | "all">("all");
+  const [selectedScope, setSelectedScope] = useState<PullRequestScope>("all");
   const [selectedPrId, setSelectedPrId] = useState<string>("");
   const [selectedFilePath, setSelectedFilePath] = useState<string>("");
   const [query, setQuery] = useState("");
@@ -229,6 +258,9 @@ export function App() {
     setIsLoading(true);
     try {
       const result = await loadAllPullRequests(nextSettings);
+      if (result.updatedSettings) {
+        setSettings(result.updatedSettings);
+      }
       setPullRequests(result.pullRequests);
       setLoadErrors(result.errors);
       setUsingDemo(result.usingDemo);
@@ -329,7 +361,11 @@ export function App() {
       );
       const bitbucketConnections = [
         ...existing,
-        ...workspaces.map((workspace) => ({ workspace, token: token.access_token })),
+        ...workspaces.map((workspace) => ({
+          workspace,
+          token: token.access_token,
+          refreshToken: token.refresh_token,
+        })),
       ];
       const next = { ...settings, bitbucketAccessToken: "", bitbucketConnections };
       setSettings(next);
@@ -364,15 +400,15 @@ export function App() {
     providerName: string,
     getPending: () => Promise<OAuthCallback | undefined>,
     onCallback: (callback: (payload: OAuthCallback) => void) => () => void,
-  ) {
+  ): Promise<OAuthCallback & { access_token: string }> {
     if (!window.reviewDesk) throw new Error("OAuth connect needs Electron app.");
     const pending = await getPending();
     if (pending?.state === state) {
       if (pending.error) throw new Error(pending.error);
-      if (pending.access_token) return { access_token: pending.access_token };
+      if (pending.access_token) return { ...pending, access_token: pending.access_token };
     }
 
-    return new Promise<{ access_token: string }>((resolve, reject) => {
+    return new Promise<OAuthCallback & { access_token: string }>((resolve, reject) => {
       const timeout = window.setTimeout(() => {
         unsubscribe();
         reject(new Error(`${providerName} OAuth timed out`));
@@ -390,7 +426,7 @@ export function App() {
           reject(new Error(`${providerName} did not return a token`));
           return;
         }
-        resolve({ access_token: payload.access_token });
+        resolve({ ...payload, access_token: payload.access_token });
       });
     });
   }
@@ -398,14 +434,18 @@ export function App() {
   const visiblePullRequests = useMemo(() => {
     return pullRequests.filter((pr) => {
       const providerMatch = selectedProvider === "all" || pr.provider === selectedProvider;
+      const scope = scopeFilters.find((item) => item.value === selectedScope);
+      const scopeMatch = !scope?.role || pr.viewerRoles?.includes(scope.role);
       const textMatch = `${pr.title} ${pr.repo} ${pr.author}`.toLowerCase().includes(query.toLowerCase());
-      return providerMatch && textMatch;
+      return providerMatch && scopeMatch && textMatch;
     });
-  }, [pullRequests, query, selectedProvider]);
+  }, [pullRequests, query, selectedProvider, selectedScope]);
 
-  const selectedPr = pullRequests.find((pr) => pr.id === selectedPrId) ?? visiblePullRequests[0];
+  const selectedPr = visiblePullRequests.find((pr) => pr.id === selectedPrId) ?? visiblePullRequests[0];
   const selectedFile =
     selectedPr?.files.find((file) => file.path === selectedFilePath) ?? selectedPr?.files[0];
+  const hasConnectedAccounts = settings.githubConnections.length > 0 || settings.bitbucketConnections.length > 0;
+  const isFiltered = selectedProvider !== "all" || selectedScope !== "all" || query.trim().length > 0;
 
   useEffect(() => {
     if (selectedPr && !selectedPr.files.some((file) => file.path === selectedFilePath)) {
@@ -505,6 +545,21 @@ export function App() {
           ))}
         </div>
 
+        <div className="flex flex-wrap gap-1.5 rounded-lg bg-[#0f141b] p-[5px]" aria-label="Pull request scope filter">
+          {scopeFilters.map((scope) => (
+            <button
+              key={scope.value}
+              className={cn(
+                "min-h-8 cursor-pointer rounded-md border-0 bg-transparent px-2.5 text-[12px] text-[#91a0af]",
+                selectedScope === scope.value && "bg-[#253241] text-[#f7fafc]",
+              )}
+              onClick={() => setSelectedScope(scope.value)}
+            >
+              {scope.label}
+            </button>
+          ))}
+        </div>
+
         {loadErrors.length > 0 && (
           <div className="flex flex-col gap-1.5 rounded-lg border border-[#665a34] bg-[#f0cf78]/10 px-3 py-2.5">
             {loadErrors.map((error) => (
@@ -531,6 +586,18 @@ export function App() {
               {pr.isDemo && (
                 <span className="w-fit rounded-full border border-[#665a34] px-[7px] py-0.5 text-[11px] font-bold text-[#f5d987]">
                   Demo
+                </span>
+              )}
+              {pr.viewerRoles && pr.viewerRoles.length > 0 && (
+                <span className="flex flex-wrap gap-1">
+                  {pr.viewerRoles.map((role) => (
+                    <span
+                      className="w-fit rounded-full border border-[#334253] px-[7px] py-0.5 text-[11px] font-bold text-[#aebdcb]"
+                      key={`${pr.id}-${role}`}
+                    >
+                      {roleLabels[role]}
+                    </span>
+                  ))}
                 </span>
               )}
               <strong>{pr.title}</strong>
@@ -615,17 +682,36 @@ export function App() {
         ) : (
           <div className="grid min-h-[60vh] place-items-center text-center text-[#91a0af]">
             <div className="flex max-w-[360px] flex-col items-center gap-3">
-              <h2 className="m-0 text-[22px] tracking-normal text-[#e7edf4]">No accounts connected</h2>
-              <p className="m-0">Connect GitHub or Bitbucket to review pull requests.</p>
-              <button
-                className={controls.primary}
-                onClick={() => {
-                  setSettingsPage("connections");
-                  setSettingsOpen(true);
-                }}
-              >
-                Settings
-              </button>
+              <h2 className="m-0 text-[22px] tracking-normal text-[#e7edf4]">
+                {hasConnectedAccounts ? "No pull requests found" : "No accounts connected"}
+              </h2>
+              <p className="m-0">
+                {hasConnectedAccounts
+                  ? "Try a different provider, scope, or search filter."
+                  : "Connect GitHub or Bitbucket to review pull requests."}
+              </p>
+              {hasConnectedAccounts && isFiltered ? (
+                <button
+                  className={controls.primary}
+                  onClick={() => {
+                    setSelectedProvider("all");
+                    setSelectedScope("all");
+                    setQuery("");
+                  }}
+                >
+                  Clear filters
+                </button>
+              ) : (
+                <button
+                  className={controls.primary}
+                  onClick={() => {
+                    setSettingsPage("connections");
+                    setSettingsOpen(true);
+                  }}
+                >
+                  Settings
+                </button>
+              )}
             </div>
           </div>
         )}

@@ -78,6 +78,7 @@ module.exports = async function handler(req, res) {
     redirectToApp(res, state.appRedirect, {
       state: state.desktopState,
       access_token: token.access_token,
+      refresh_token: token.refresh_token,
       expires_in: token.expires_in,
       token_type: token.token_type,
     });

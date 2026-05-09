@@ -1,5 +1,13 @@
 import { languageFromPath } from "./diff";
-import type { AccountSettings, PullRequestSummary, ProviderKind, ReviewComment, ReviewFile } from "./types";
+import { appConfig } from "./config";
+import type {
+  AccountSettings,
+  PullRequestSummary,
+  ProviderKind,
+  PullRequestViewerRole,
+  ReviewComment,
+  ReviewFile,
+} from "./types";
 
 type PullRequestProvider = {
   kind: ProviderKind;
@@ -13,6 +21,13 @@ export type LoadResult = {
   pullRequests: PullRequestSummary[];
   errors: string[];
   usingDemo: boolean;
+  updatedSettings?: AccountSettings;
+};
+
+type BitbucketConnection = AccountSettings["bitbucketConnections"][number];
+
+const oauthConfig = {
+  bitbucketBrokerUrl: import.meta.env.VITE_BITBUCKET_BROKER_URL || appConfig.bitbucketBrokerUrl,
 };
 
 const dashboardDiff = `@@ -1,13 +1,18 @@
@@ -136,6 +151,7 @@ const mockPullRequests: PullRequestSummary[] = [
     deletions: 9,
     comments: 4,
     state: "waiting",
+    viewerRoles: ["reviewer"],
     isDemo: true,
     files: [
       {
@@ -170,6 +186,7 @@ const mockPullRequests: PullRequestSummary[] = [
     deletions: 7,
     comments: 2,
     state: "changes-requested",
+    viewerRoles: ["author"],
     isDemo: true,
     files: [
       {
@@ -196,6 +213,7 @@ const mockPullRequests: PullRequestSummary[] = [
     deletions: 5,
     comments: 7,
     state: "commented",
+    viewerRoles: ["participant"],
     isDemo: true,
     files: [
       {
@@ -234,14 +252,17 @@ type GitHubPull = {
   additions: number;
   deletions: number;
   review_comments: number;
+  draft?: boolean;
 };
 
-type BitbucketUser = { username?: string; display_name?: string };
+type BitbucketUser = { account_id?: string; nickname?: string; username?: string; display_name?: string };
 type BitbucketRepo = { slug: string; full_name: string; workspace: { slug: string } };
 type BitbucketPull = {
   id: number;
   title: string;
-  author?: { display_name?: string; nickname?: string };
+  author?: BitbucketUser;
+  reviewers?: BitbucketUser[];
+  participants?: Array<{ user?: BitbucketUser }>;
   source?: { branch?: { name?: string } };
   destination?: { branch?: { name?: string } };
   updated_on: string;
@@ -308,6 +329,19 @@ function formatDate(value: string) {
   }).format(new Date(value));
 }
 
+function uniqueRoles(roles: PullRequestViewerRole[]) {
+  return [...new Set(roles)];
+}
+
+function sameBitbucketUser(left: BitbucketUser | undefined, right: BitbucketUser | undefined) {
+  if (!left || !right) return false;
+  if (left.account_id && right.account_id && left.account_id === right.account_id) return true;
+  if (left.nickname && right.nickname && left.nickname === right.nickname) return true;
+  if (left.username && right.username && left.username === right.username) return true;
+  if (left.display_name && right.display_name && left.display_name === right.display_name) return true;
+  return false;
+}
+
 function toFile(filename: string, patch: string | undefined, file: Partial<ReviewFile> = {}): ReviewFile {
   return {
     path: filename,
@@ -336,15 +370,36 @@ async function loadGitHubPullRequests(settings: AccountSettings): Promise<PullRe
 async function loadGitHubPullRequestsForToken(token: string): Promise<PullRequestSummary[]> {
   const headers = githubHeaders(token);
   const user = await requestJson<GitHubUser>("https://api.github.com/user", { headers });
-  const search = await requestJson<GitHubSearchResponse>(
-    `https://api.github.com/search/issues?q=${encodeURIComponent(
-      `is:pr is:open involves:${user.login}`,
-    )}&sort=updated&order=desc&per_page=20`,
-    { headers },
+  const roleQueries: Array<{ role: PullRequestViewerRole; query: string }> = [
+    { role: "participant", query: `is:pr is:open involves:${user.login}` },
+    { role: "author", query: `is:pr is:open author:${user.login}` },
+    { role: "reviewer", query: `is:pr is:open review-requested:${user.login}` },
+    { role: "assignee", query: `is:pr is:open assignee:${user.login}` },
+    { role: "mentioned", query: `is:pr is:open mentions:${user.login}` },
+  ];
+  const searchGroups = await Promise.all(
+    roleQueries.map(async ({ role, query }) => ({
+      role,
+      items: (
+        await requestJson<GitHubSearchResponse>(
+          `https://api.github.com/search/issues?q=${encodeURIComponent(query)}&sort=updated&order=desc&per_page=20`,
+          { headers },
+        )
+      ).items,
+    })),
   );
+  const itemsByUrl = new Map<string, { item: GitHubSearchItem; roles: PullRequestViewerRole[] }>();
+  for (const group of searchGroups) {
+    for (const item of group.items.filter((entry) => entry.pull_request)) {
+      const current = itemsByUrl.get(item.html_url) ?? { item, roles: [] };
+      current.roles.push(group.role);
+      if (new Date(item.updated_at) > new Date(current.item.updated_at)) current.item = item;
+      itemsByUrl.set(item.html_url, current);
+    }
+  }
 
   const pullRequests: Array<PullRequestSummary | null> = await Promise.all(
-    search.items.filter((item) => item.pull_request).map(async (item) => {
+    [...itemsByUrl.values()].slice(0, 30).map(async ({ item, roles }) => {
       const repoRef = parseGitHubRepo(item.html_url);
       if (!repoRef) return null;
       const baseUrl = `https://api.github.com/repos/${repoRef.owner}/${repoRef.repo}/pulls/${repoRef.number}`;
@@ -366,6 +421,7 @@ async function loadGitHubPullRequestsForToken(token: string): Promise<PullReques
         deletions: pull.deletions,
         comments: item.comments + pull.review_comments,
         state: "waiting" as const,
+        viewerRoles: uniqueRoles(roles),
         files: files.map((file) =>
           toFile(file.filename, file.patch, {
             status: toReviewFileStatus(file.status),
@@ -380,10 +436,6 @@ async function loadGitHubPullRequestsForToken(token: string): Promise<PullReques
   return pullRequests.filter((item): item is PullRequestSummary => item !== null);
 }
 
-function bitbucketHeaders(settings: AccountSettings): HeadersInit {
-  return bitbucketHeadersForToken(settings.bitbucketAccessToken.trim());
-}
-
 function bitbucketHeadersForToken(token: string): HeadersInit {
   return {
     Accept: "application/json",
@@ -391,11 +443,62 @@ function bitbucketHeadersForToken(token: string): HeadersInit {
   };
 }
 
-async function loadBitbucketPage<T>(url: string, headers: HeadersInit, limit = 50): Promise<T[]> {
+function isUnauthorized(error: unknown) {
+  return error instanceof Error && /^401\b/.test(error.message);
+}
+
+async function refreshBitbucketConnection(connection: BitbucketConnection) {
+  if (!connection.refreshToken) {
+    throw new Error(
+      "Bitbucket access token expired and this saved connection does not have a refresh token yet. Disconnect and reconnect Bitbucket once.",
+    );
+  }
+  if (!oauthConfig.bitbucketBrokerUrl) {
+    throw new Error("Bitbucket access token expired and no hosted broker URL is configured for refresh.");
+  }
+
+  const response = await fetch(new URL("/api/bitbucket/refresh", oauthConfig.bitbucketBrokerUrl), {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ refresh_token: connection.refreshToken }),
+  });
+  const token = await response.json();
+  if (!response.ok || token.error || !token.access_token) {
+    throw new Error(token.error || "Bitbucket token refresh failed. Reconnect Bitbucket and try again.");
+  }
+
+  connection.token = token.access_token;
+  if (token.refresh_token) connection.refreshToken = token.refresh_token;
+}
+
+async function requestBitbucketJson<T>(url: string, connection: BitbucketConnection): Promise<T> {
+  try {
+    return await requestJson<T>(url, { headers: bitbucketHeadersForToken(connection.token) });
+  } catch (error) {
+    if (!isUnauthorized(error)) throw error;
+    await refreshBitbucketConnection(connection);
+    return requestJson<T>(url, { headers: bitbucketHeadersForToken(connection.token) });
+  }
+}
+
+async function fetchBitbucketText(url: string, connection: BitbucketConnection): Promise<string> {
+  const fetchWithToken = () => fetch(url, { headers: bitbucketHeadersForToken(connection.token) });
+  let response = await fetchWithToken();
+  if (response.status === 401) {
+    await refreshBitbucketConnection(connection);
+    response = await fetchWithToken();
+  }
+  return response.ok ? response.text() : "";
+}
+
+async function loadBitbucketPage<T>(url: string, connection: BitbucketConnection, limit = 50): Promise<T[]> {
   const values: T[] = [];
   let next: string | undefined = url;
   while (next && values.length < limit) {
-    const page: { values: T[]; next?: string } = await requestJson(next, { headers });
+    const page: { values: T[]; next?: string } = await requestBitbucketJson(next, connection);
     values.push(...page.values);
     next = page.next;
   }
@@ -406,19 +509,18 @@ async function loadBitbucketPullRequests(settings: AccountSettings): Promise<Pul
   const connections = getBitbucketConnections(settings);
   if (connections.length === 0) return [];
   const groups = await Promise.all(
-    connections.map((connection) => loadBitbucketWorkspacePullRequests(connection.workspace, connection.token)),
+    connections.map((connection) => loadBitbucketWorkspacePullRequests(connection)),
   );
   return groups.flat();
 }
 
-async function loadBitbucketWorkspacePullRequests(workspace: string, token: string): Promise<PullRequestSummary[]> {
-  const headers = bitbucketHeadersForToken(token);
-  await requestJson<BitbucketUser>("https://api.bitbucket.org/2.0/user", { headers });
+async function loadBitbucketWorkspacePullRequests(connection: BitbucketConnection): Promise<PullRequestSummary[]> {
+  const user = await requestBitbucketJson<BitbucketUser>("https://api.bitbucket.org/2.0/user", connection);
 
   const repos = (
     await loadBitbucketPage<BitbucketRepo>(
-      `https://api.bitbucket.org/2.0/repositories/${workspace}?pagelen=50`,
-      headers,
+      `https://api.bitbucket.org/2.0/repositories/${connection.workspace}?pagelen=50`,
+      connection,
       50,
     )
   );
@@ -428,7 +530,7 @@ async function loadBitbucketWorkspacePullRequests(workspace: string, token: stri
       repos.slice(0, 40).map(async (repo) => {
         const pulls = await loadBitbucketPage<BitbucketPull>(
           `https://api.bitbucket.org/2.0/repositories/${repo.workspace.slug}/${repo.slug}/pullrequests?state=OPEN&pagelen=20`,
-          headers,
+          connection,
           20,
         );
         return pulls.map((pull) => ({ repo, pull }));
@@ -438,12 +540,18 @@ async function loadBitbucketWorkspacePullRequests(workspace: string, token: stri
 
   const summaries = await Promise.all(
     openPullRequests.slice(0, 30).map(async ({ repo, pull }) => {
-      const diff = await fetch(
+      const diff = await fetchBitbucketText(
         `https://api.bitbucket.org/2.0/repositories/${repo.workspace.slug}/${repo.slug}/pullrequests/${pull.id}/diff`,
-        { headers },
-      ).then((response) => (response.ok ? response.text() : ""));
+        connection,
+      );
       const additions = diff.split("\n").filter((line) => line.startsWith("+") && !line.startsWith("+++")).length;
       const deletions = diff.split("\n").filter((line) => line.startsWith("-") && !line.startsWith("---")).length;
+      const viewerRoles: PullRequestViewerRole[] = [];
+      if (sameBitbucketUser(pull.author, user)) viewerRoles.push("author");
+      if (pull.reviewers?.some((reviewer) => sameBitbucketUser(reviewer, user))) viewerRoles.push("reviewer");
+      if (pull.participants?.some((participant) => sameBitbucketUser(participant.user, user))) {
+        viewerRoles.push("participant");
+      }
       return {
         id: `bitbucket-${repo.full_name}-${pull.id}`,
         provider: "bitbucket" as const,
@@ -458,6 +566,7 @@ async function loadBitbucketWorkspacePullRequests(workspace: string, token: stri
         deletions,
         comments: pull.comment_count ?? 0,
         state: "waiting" as const,
+        viewerRoles: uniqueRoles(viewerRoles),
         files: [toFile("pullrequest.diff", diff || undefined, { additions, deletions })],
       };
     }),
@@ -492,15 +601,21 @@ export const providers: PullRequestProvider[] = [
 ];
 
 export async function loadAllPullRequests(settings: AccountSettings): Promise<LoadResult> {
-  const hasAnyAccount = hasGitHub(settings) || hasBitbucket(settings);
+  const workingSettings = structuredClone(settings);
+  const hasAnyAccount = hasGitHub(workingSettings) || hasBitbucket(workingSettings);
   if (!hasAnyAccount) {
     return { pullRequests: [], errors: [], usingDemo: false };
   }
 
-  const settled = await Promise.allSettled(providers.map((provider) => provider.loadPullRequests(settings)));
+  const settled = await Promise.allSettled(providers.map((provider) => provider.loadPullRequests(workingSettings)));
   const pullRequests = settled.flatMap((item) => (item.status === "fulfilled" ? item.value : []));
   const errors = settled.flatMap((item, index) =>
     item.status === "rejected" ? [`${providers[index].label}: ${item.reason instanceof Error ? item.reason.message : "failed"}`] : [],
   );
-  return { pullRequests, errors, usingDemo: false };
+  return {
+    pullRequests,
+    errors,
+    usingDemo: false,
+    updatedSettings: JSON.stringify(workingSettings) === JSON.stringify(settings) ? undefined : workingSettings,
+  };
 }

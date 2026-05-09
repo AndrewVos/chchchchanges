@@ -5,7 +5,14 @@ const isDev = process.env.NODE_ENV !== "production" && !app.isPackaged;
 const appProtocol = "chchchchanges";
 const githubRedirectUri = `${appProtocol}://oauth/github`;
 const bitbucketRedirectUri = `${appProtocol}://oauth/bitbucket`;
-type OAuthPayload = { state: string; access_token?: string; expires_in?: string; token_type?: string; error?: string };
+type OAuthPayload = {
+  state: string;
+  access_token?: string;
+  refresh_token?: string;
+  expires_in?: string;
+  token_type?: string;
+  error?: string;
+};
 const pendingGitHubStates = new Map<string, NodeJS.Timeout>();
 const pendingBitbucketStates = new Map<string, { timeout: NodeJS.Timeout; clientId: string }>();
 let pendingGitHubCallback: OAuthPayload | undefined;
@@ -61,6 +68,7 @@ async function handleOAuthCallback(url: string) {
   let payload: OAuthPayload = {
     state,
     access_token: params.get("access_token") ?? undefined,
+    refresh_token: params.get("refresh_token") ?? undefined,
     expires_in: params.get("expires_in") ?? undefined,
     token_type: params.get("token_type") ?? undefined,
     error: params.get("error_description") ?? params.get("error") ?? undefined,

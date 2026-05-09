@@ -2,6 +2,8 @@ export type ProviderKind = "github" | "bitbucket";
 
 export type ReviewState = "changes-requested" | "approved" | "commented" | "waiting";
 
+export type PullRequestViewerRole = "author" | "reviewer" | "assignee" | "mentioned" | "participant";
+
 export type PullRequestSummary = {
   id: string;
   provider: ProviderKind;
@@ -16,6 +18,7 @@ export type PullRequestSummary = {
   deletions: number;
   comments: number;
   state: ReviewState;
+  viewerRoles?: PullRequestViewerRole[];
   files: ReviewFile[];
   isDemo?: boolean;
 };
@@ -54,6 +57,7 @@ export type AccountSettings = {
   bitbucketConnections: Array<{
     workspace: string;
     token: string;
+    refreshToken?: string;
   }>;
 };
 
