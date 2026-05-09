@@ -85,14 +85,33 @@ git push origin v1.0.0
 ```
 
 The `Release desktop app` workflow builds `release/Chchchchanges-<version>-mac-universal.dmg`, publishes it to the
-GitHub Release, calculates its SHA-256 checksum, and updates `Casks/chchchchanges.rb` on `main`.
+GitHub Release, calculates its SHA-256 checksum, validates the cask syntax, and updates `Casks/chchchchanges.rb` on
+`main`.
 
-After the workflow finishes, users can install from this repository as a Homebrew tap:
+Users can install from this repository as a Homebrew tap:
 
 ```bash
 brew tap AndrewVos/chchchchanges https://github.com/AndrewVos/chchchchanges
 brew install --cask chchchchanges
 ```
 
-For a conventional tap command later, create `AndrewVos/homebrew-chchchchanges`, copy `Casks/chchchchanges.rb` there,
-and users can run `brew tap AndrewVos/chchchchanges`.
+For a conventional tap, create `AndrewVos/homebrew-chchchchanges` and add a `HOMEBREW_TAP_TOKEN` repository secret with
+push access to that tap. Future releases will sync `Casks/chchchchanges.rb` there automatically, and users can install
+with:
+
+```bash
+brew tap AndrewVos/chchchchanges
+brew install --cask chchchchanges
+```
+
+Once the conventional tap exists, users can also install in one command:
+
+```bash
+brew install --cask AndrewVos/chchchchanges/chchchchanges
+```
+
+The current desktop build is unsigned and not notarized. If macOS blocks the first launch after Homebrew installs it:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/Chchchchanges.app
+```

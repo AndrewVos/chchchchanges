@@ -78,14 +78,41 @@ jobs:
           git fetch origin main
           git checkout main
           bun run cask:update -- "${{ steps.version.outputs.version }}" "${{ steps.artifact.outputs.sha256 }}"
+          bun run cask:check
 
           if git diff --quiet -- Casks/chchchchanges.rb; then
             echo "Homebrew cask already up to date."
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add Casks/chchchchanges.rb
+            git commit -m "Update Homebrew cask for ${{ steps.version.outputs.tag }}"
+            git push origin main
+          fi
+
+      - name: Sync conventional Homebrew tap
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        shell: bash
+        run: |
+          if [[ -z "${HOMEBREW_TAP_TOKEN:-}" ]]; then
+            echo "Skipping tap sync. Set HOMEBREW_TAP_TOKEN to update AndrewVos/homebrew-chchchchanges."
+            exit 0
+          fi
+
+          TAP_DIR="$(mktemp -d)"
+          git clone "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/AndrewVos/homebrew-chchchchanges.git" "$TAP_DIR"
+          mkdir -p "$TAP_DIR/Casks"
+          cp Casks/chchchchanges.rb "$TAP_DIR/Casks/chchchchanges.rb"
+          cd "$TAP_DIR"
+
+          if git diff --quiet -- Casks/chchchchanges.rb; then
+            echo "Conventional Homebrew tap already up to date."
             exit 0
           fi
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add Casks/chchchchanges.rb
-          git commit -m "Update Homebrew cask for ${{ steps.version.outputs.tag }}"
-          git push origin main
+          git commit -m "Update chchchchanges cask for ${{ steps.version.outputs.tag }}"
+          git push origin HEAD:main
