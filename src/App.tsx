@@ -14,13 +14,11 @@ import {
   Clock3,
   X,
   CircleDot,
-  Code2,
   GitPullRequestArrow,
   Loader2,
   MessageSquarePlus,
   Monitor,
   Moon,
-  PanelLeft,
   Search,
   Send,
   Settings,
@@ -361,11 +359,26 @@ function loadPercent(progress: { completed: number; total: number }) {
   return Math.min(100, Math.max(0, Math.round((progress.completed / progress.total) * 100)));
 }
 
+function relativeTime(value: string) {
+  const timestamp = new Date(value).getTime();
+  if (!Number.isFinite(timestamp)) return "";
+  const seconds = Math.max(0, Math.round((Date.now() - timestamp) / 1000));
+  if (seconds < 60) return "now";
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours}h`;
+  const days = Math.round(hours / 24);
+  if (days < 30) return `${days}d`;
+  const months = Math.round(days / 30);
+  if (months < 12) return `${months}mo`;
+  return `${Math.round(months / 12)}y`;
+}
+
 export function App() {
   const [pullRequests, setPullRequests] = useState<PullRequestSummary[]>([]);
   const [selectedProvider, setSelectedProvider] = useState<ProviderKind | "all">("all");
   const [selectedPrId, setSelectedPrId] = useState<string>("");
-  const [selectedFilePath, setSelectedFilePath] = useState<string>("");
   const [query, setQuery] = useState("");
   const [comments, setComments] = useState<ReviewComment[]>(initialComments);
   const [activeLineKey, setActiveLineKey] = useState<string | null>(null);
@@ -437,7 +450,6 @@ export function App() {
     refreshIdRef.current = refreshId;
     setPullRequests([]);
     setSelectedPrId("");
-    setSelectedFilePath("");
     loadingFileIdsRef.current = new Set();
     failedFileIdsRef.current = new Set();
     setLoadingFileIds(new Set());
@@ -698,8 +710,6 @@ export function App() {
   );
 
   const selectedPr = visiblePullRequests.find((pr) => pr.id === selectedPrId) ?? visiblePullRequests[0];
-  const selectedFile =
-    selectedPr?.files.find((file) => file.path === selectedFilePath) ?? selectedPr?.files[0];
   const selectedFilesLoading = Boolean(selectedPr && loadingFileIds.has(selectedPr.id));
   const selectedDescription = selectedPr?.description?.trim() ?? "";
   const hasConnectedAccounts = settings.githubConnections.length > 0 || settings.bitbucketConnections.length > 0;
@@ -822,7 +832,6 @@ export function App() {
         setPullRequests((items) =>
           items.map((item) => (item.id === result.pullRequest.id ? mergePullRequests([item], [result.pullRequest])[0] : item)),
         );
-        setSelectedFilePath((current) => current || (result.pullRequest.files[0]?.path ?? ""));
       })
       .catch((error) => {
         if (cancelled) return;
@@ -852,15 +861,8 @@ export function App() {
     };
   }, [selectedPr, settings]);
 
-  useEffect(() => {
-    if (selectedPr?.filesLoaded && !selectedPr.files.some((file) => file.path === selectedFilePath)) {
-      setSelectedFilePath(selectedPr.files[0]?.path ?? "");
-    }
-  }, [selectedFilePath, selectedPr]);
-
   function selectPullRequest(pr: PullRequestSummary) {
     setSelectedPrId(pr.id);
-    setSelectedFilePath(pr.filesLoaded ? pr.files[0]?.path ?? "" : "");
     setActiveLineKey(null);
     setDraft("");
     setInboxState((current) => ({
@@ -884,7 +886,6 @@ export function App() {
     if (selectedPrId === pr.id) {
       const nextPr = visiblePullRequests.find((item) => item.id !== pr.id);
       setSelectedPrId(nextPr?.id ?? "");
-      setSelectedFilePath(nextPr?.filesLoaded ? nextPr.files[0]?.path ?? "" : "");
     }
   }
 
@@ -929,7 +930,7 @@ export function App() {
 
   return (
     <div
-      className="relative grid h-screen overflow-hidden grid-cols-[340px_minmax(0,1fr)] bg-[var(--bg)] text-[var(--text)] max-[1040px]:grid-cols-[300px_minmax(0,1fr)]"
+      className="relative grid h-screen overflow-hidden grid-cols-[380px_minmax(0,1fr)] bg-[var(--bg)] text-[var(--text)] max-[1040px]:grid-cols-[330px_minmax(0,1fr)]"
       style={themeVars(resolvedTheme)}
     >
       <div className="fixed left-0 right-0 top-0 z-10 h-8 [-webkit-app-region:drag]" aria-hidden="true" />
@@ -1012,7 +1013,18 @@ export function App() {
                 {unread && <span className="size-2 rounded-full bg-[var(--accent)]" aria-label="Unread" />}
               </span>
               <span className="flex min-w-0 flex-col gap-2">
-                <strong className={cn("min-w-0", !unread && "font-semibold text-[var(--text-soft)]")}>
+                <span className="flex min-w-0 items-center justify-between gap-3 text-[13px] text-[var(--text-muted)]">
+                  <span className="min-w-0 truncate">
+                    {pr.repo}
+                  </span>
+                  <span className="shrink-0 text-xs">{relativeTime(pr.updatedAtIso)}</span>
+                </span>
+                <strong
+                  className={cn(
+                    "min-w-0 overflow-hidden text-[13px] leading-5 [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2]",
+                    !unread && "font-semibold text-[var(--text-soft)]",
+                  )}
+                >
                   {pr.title}
                 </strong>
               {pr.isDemo && (
@@ -1020,18 +1032,6 @@ export function App() {
                   Demo
                 </span>
               )}
-              <span className="text-[13px] text-[var(--text-muted)]">
-                {pr.repo} #{pr.number}
-              </span>
-              <span className="flex items-center justify-between gap-2.5 text-xs text-[var(--text-muted)]">
-                <span>{pr.author}</span>
-                <span>{pr.updatedAt}</span>
-              </span>
-              <span className="flex items-center justify-start gap-2.5 text-xs text-[var(--text-muted)]">
-                <span className="text-[var(--success)]">+{pr.additions}</span>
-                <span className="text-[var(--danger)]">-{pr.deletions}</span>
-                <span>{pr.comments} comments</span>
-              </span>
               </span>
             </article>
             );
@@ -1098,6 +1098,7 @@ export function App() {
                   >
                     #{selectedPr.number}
                   </a>{" "}
+                  opened by <strong>{selectedPr.author}</strong>{" "}
                   from{" "}
                   <a
                     className={externalLinkClasses}
@@ -1141,10 +1142,6 @@ export function App() {
                     ))}
                   </div>
                 </div>
-                <button className={controls.ghost}>
-                  <PanelLeft size={16} />
-                  Files {selectedPr.filesLoaded ? selectedPr.files.length : ""}
-                </button>
                 <button className={controls.success}>
                   <CheckCircle2 size={16} />
                   Approve
@@ -1152,37 +1149,17 @@ export function App() {
               </div>
             </header>
 
-            <section className="grid min-h-0 flex-1 grid-cols-[280px_minmax(0,1fr)] overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--panel)] max-[1040px]:grid-cols-[220px_minmax(0,1fr)]">
-              <nav className="flex min-h-0 flex-col gap-1 overflow-auto border-r border-[var(--border)] bg-[var(--surface)] p-3" aria-label="Changed files">
-                {!selectedPr.filesLoaded ? (
-                  <div className="flex items-center gap-2 rounded-[7px] p-2.5 text-[13px] text-[var(--text-muted)]">
-                    <Loader2 className="animate-spin text-[var(--link)]" size={15} />
-                    Loading files
+            <section className="min-h-0 flex-1 overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--panel)]">
+              {!selectedPr.filesLoaded ? (
+                <div className="grid h-full min-h-0 min-w-0 place-items-center text-[var(--text-muted)]">
+                  <div className="flex items-center gap-2">
+                    <Loader2 className="animate-spin text-[var(--link)]" size={17} />
+                    Loading file changes
                   </div>
-                ) : (
-                  selectedPr.files.map((file) => (
-                    <button
-                      key={file.path}
-                      className={cn(
-                        "grid cursor-pointer grid-cols-[18px_minmax(0,1fr)] gap-2 rounded-[7px] border border-transparent bg-transparent p-2.5 text-left text-[var(--text-soft)]",
-                        selectedFile?.path === file.path && "border-[var(--border-active)] bg-[var(--surface-4)]",
-                      )}
-                      onClick={() => setSelectedFilePath(file.path)}
-                    >
-                      <Code2 size={15} />
-                      <span className="break-words">{file.path}</span>
-                      <span className="col-start-2 flex gap-2 text-xs">
-                        <b>+{file.additions}</b>
-                        <i className="not-italic text-[var(--danger)]">-{file.deletions}</i>
-                      </span>
-                    </button>
-                  ))
-                )}
-              </nav>
-
-              {selectedFile ? (
-                <DiffViewer
-                  file={selectedFile}
+                </div>
+              ) : (
+                <DiffStack
+                  files={selectedPr.files}
                   pr={selectedPr}
                   comments={comments}
                   loading={selectedFilesLoading}
@@ -1192,13 +1169,6 @@ export function App() {
                   onDraftChange={setDraft}
                   onSubmit={addComment}
                 />
-              ) : (
-                <div className="grid min-h-0 min-w-0 place-items-center text-[var(--text-muted)]">
-                  <div className="flex items-center gap-2">
-                    <Loader2 className="animate-spin text-[var(--link)]" size={17} />
-                    Loading file changes
-                  </div>
-                </div>
               )}
             </section>
           </>
@@ -1496,7 +1466,6 @@ type DiffViewerProps = {
   file: ReviewFile;
   pr: PullRequestSummary;
   comments: ReviewComment[];
-  loading?: boolean;
   activeLineKey: string | null;
   draft: string;
   onActivateLine(lineKey: string | null): void;
@@ -1504,11 +1473,51 @@ type DiffViewerProps = {
   onSubmit(file: ReviewFile, line: DiffLine): void;
 };
 
+type DiffStackProps = {
+  files: ReviewFile[];
+  loading?: boolean;
+} & Omit<DiffViewerProps, "file">;
+
+function DiffStack({
+  files,
+  pr,
+  comments,
+  loading,
+  activeLineKey,
+  draft,
+  onActivateLine,
+  onDraftChange,
+  onSubmit,
+}: DiffStackProps) {
+  return (
+    <div className="flex h-full min-h-0 min-w-0 flex-col overflow-auto">
+      {loading && (
+        <div className="flex items-center gap-2 border-b border-[var(--border)] px-3.5 py-3 text-[var(--text-muted)]">
+          <Loader2 className="animate-spin text-[var(--link)]" size={15} />
+          Loading file changes
+        </div>
+      )}
+      {files.map((file) => (
+        <DiffViewer
+          key={file.path}
+          file={file}
+          pr={pr}
+          comments={comments}
+          activeLineKey={activeLineKey}
+          draft={draft}
+          onActivateLine={onActivateLine}
+          onDraftChange={onDraftChange}
+          onSubmit={onSubmit}
+        />
+      ))}
+    </div>
+  );
+}
+
 function DiffViewer({
   file,
   pr,
   comments,
-  loading,
   activeLineKey,
   draft,
   onActivateLine,
@@ -1519,7 +1528,7 @@ function DiffViewer({
   const language = languageFromPath(file.path);
 
   return (
-    <div className="flex min-h-0 min-w-0 flex-col overflow-hidden">
+    <div className="flex min-w-0 flex-col border-b border-[var(--border)] last:border-b-0">
       <div className="flex min-h-[54px] items-center justify-between border-b border-[var(--border)] bg-[var(--panel-header)] px-4">
         <div className="flex items-center gap-2.5">
           <strong>{file.path}</strong>
@@ -1532,16 +1541,10 @@ function DiffViewer({
       </div>
 
       <div
-        className="min-h-0 flex-1 overflow-auto font-mono text-[13px] leading-[1.55]"
+        className="font-mono text-[13px] leading-[1.55]"
         role="table"
         aria-label={`${file.path} unified diff`}
       >
-        {loading && (
-          <div className="flex items-center gap-2 border-b border-[var(--border)] px-3.5 py-3 text-[var(--text-muted)]">
-            <Loader2 className="animate-spin text-[var(--link)]" size={15} />
-            Loading file changes
-          </div>
-        )}
         {hunks.map((hunk) => (
           <div key={hunk.header}>
             <div className="sticky top-0 z-[2] border-b border-[var(--border)] bg-[var(--diff-header)] px-3.5 py-[7px] text-[var(--link)]">
