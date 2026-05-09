@@ -27,6 +27,7 @@ declare global {
   interface Window {
     reviewDesk?: {
       platform: string;
+      connectGitHub(clientId: string, brokerUrl?: string): Promise<{ state: string }>;
       startGitHubDeviceFlow(clientId: string): Promise<{
         device_code: string;
         user_code: string;
@@ -38,14 +39,16 @@ declare global {
         clientId: string,
         deviceCode: string,
       ): Promise<{ access_token?: string; error?: string; error_description?: string; interval?: number }>;
+      getPendingGitHubCallback(): Promise<OAuthCallback | undefined>;
+      onGitHubCallback(callback: (payload: OAuthCallback) => void): () => void;
       connectBitbucket(clientId: string, brokerUrl?: string): Promise<{ state: string }>;
-      getPendingBitbucketCallback(): Promise<BitbucketCallback | undefined>;
-      onBitbucketCallback(callback: (payload: BitbucketCallback) => void): () => void;
+      getPendingBitbucketCallback(): Promise<OAuthCallback | undefined>;
+      onBitbucketCallback(callback: (payload: OAuthCallback) => void): () => void;
     };
   }
 }
 
-type BitbucketCallback = {
+type OAuthCallback = {
   state: string;
   access_token?: string;
   expires_in?: string;
@@ -98,6 +101,7 @@ const emptySettings: AccountSettings = {
 
 const oauthConfig = {
   githubClientId: import.meta.env.VITE_GITHUB_CLIENT_ID || appConfig.githubClientId,
+  githubBrokerUrl: import.meta.env.VITE_GITHUB_BROKER_URL || appConfig.githubBrokerUrl,
   bitbucketClientId: import.meta.env.VITE_BITBUCKET_CLIENT_ID || appConfig.bitbucketClientId,
   bitbucketBrokerUrl: import.meta.env.VITE_BITBUCKET_BROKER_URL || appConfig.bitbucketBrokerUrl,
 };
@@ -182,8 +186,8 @@ export function App() {
   async function connectGitHub() {
     try {
       const clientId = oauthConfig.githubClientId || settings.githubClientId;
-      if (!clientId.trim()) {
-        setOauthStatus("Missing VITE_GITHUB_CLIENT_ID. Add it to .env and restart.");
+      if (!clientId.trim() && !oauthConfig.githubBrokerUrl) {
+        setOauthStatus("Missing GitHub client ID or broker URL. Add VITE_GITHUB_BROKER_URL for hosted auth.");
         return;
       }
       if (!window.reviewDesk) {
@@ -191,27 +195,20 @@ export function App() {
         return;
       }
       setOauthStatus("Opening GitHub login in your browser...");
-      const device = await window.reviewDesk.startGitHubDeviceFlow(clientId.trim());
-      setOauthStatus(`GitHub code: ${device.user_code}. Enter it in the browser window.`);
-      const startedAt = Date.now();
-      let interval = device.interval || 5;
-      while (Date.now() - startedAt < device.expires_in * 1000) {
-        await new Promise((resolve) => window.setTimeout(resolve, interval * 1000));
-        const token = await window.reviewDesk.pollGitHubDeviceFlow(clientId.trim(), device.device_code);
-        if (token.access_token) {
-          const next = { ...settings, githubToken: token.access_token };
-          setSettings(next);
-          setOauthStatus("GitHub connected.");
-          await refreshPullRequests(next);
-          return;
-        }
-        if (token.error === "slow_down") interval += token.interval ?? 5;
-        if (token.error && !["authorization_pending", "slow_down"].includes(token.error)) {
-          setOauthStatus(token.error_description ?? token.error);
-          return;
-        }
-      }
-      setOauthStatus("GitHub device login expired.");
+      const { state } = await window.reviewDesk.connectGitHub(
+        clientId.trim() || "broker",
+        oauthConfig.githubBrokerUrl || undefined,
+      );
+      const token = await waitForOAuthCallback(
+        state,
+        "GitHub",
+        window.reviewDesk.getPendingGitHubCallback,
+        window.reviewDesk.onGitHubCallback,
+      );
+      const next = { ...settings, githubToken: token.access_token };
+      setSettings(next);
+      setOauthStatus("GitHub connected.");
+      await refreshPullRequests(next);
     } catch (error) {
       setOauthStatus(error instanceof Error ? error.message : "GitHub OAuth failed.");
     }
@@ -233,7 +230,12 @@ export function App() {
         clientId.trim() || "broker",
         oauthConfig.bitbucketBrokerUrl || undefined,
       );
-      const token = await waitForBitbucketCallback(state);
+      const token = await waitForOAuthCallback(
+        state,
+        "Bitbucket",
+        window.reviewDesk.getPendingBitbucketCallback,
+        window.reviewDesk.onBitbucketCallback,
+      );
       const next = { ...settings, bitbucketAccessToken: token.access_token };
       setSettings(next);
       setOauthStatus("Bitbucket connected.");
@@ -243,9 +245,14 @@ export function App() {
     }
   }
 
-  async function waitForBitbucketCallback(state: string) {
+  async function waitForOAuthCallback(
+    state: string,
+    providerName: string,
+    getPending: () => Promise<OAuthCallback | undefined>,
+    onCallback: (callback: (payload: OAuthCallback) => void) => () => void,
+  ) {
     if (!window.reviewDesk) throw new Error("OAuth connect needs Electron app.");
-    const pending = await window.reviewDesk.getPendingBitbucketCallback();
+    const pending = await getPending();
     if (pending?.state === state) {
       if (pending.error) throw new Error(pending.error);
       if (pending.access_token) return { access_token: pending.access_token };
@@ -254,10 +261,10 @@ export function App() {
     return new Promise<{ access_token: string }>((resolve, reject) => {
       const timeout = window.setTimeout(() => {
         unsubscribe();
-        reject(new Error("Bitbucket OAuth timed out"));
+        reject(new Error(`${providerName} OAuth timed out`));
       }, 180000);
 
-      const unsubscribe = window.reviewDesk!.onBitbucketCallback((payload) => {
+      const unsubscribe = onCallback((payload) => {
         if (payload.state !== state) return;
         window.clearTimeout(timeout);
         unsubscribe();
@@ -266,7 +273,7 @@ export function App() {
           return;
         }
         if (!payload.access_token) {
-          reject(new Error("Bitbucket did not return a token"));
+          reject(new Error(`${providerName} did not return a token`));
           return;
         }
         resolve({ access_token: payload.access_token });

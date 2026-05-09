@@ -36,15 +36,19 @@ The app shows demo PRs until you connect accounts.
 
 ### GitHub
 
-1. Create a GitHub OAuth App.
-2. Use callback URL `http://127.0.0.1/callback`.
-3. Enable Device Flow for that app.
-4. Put the OAuth app client ID in `.env` as `VITE_GITHUB_CLIENT_ID`.
-5. Click `Connect GitHub`. The app opens your system browser and shows a device code.
+GitHub uses the hosted broker too.
+
+1. In GitHub OAuth App, use callback URL `https://YOUR_HOST/api/github/callback`.
+2. Set hosted environment variables:
+   - `GITHUB_CLIENT_ID`
+   - `GITHUB_CLIENT_SECRET`
+   - `OAUTH_STATE_SECRET`
+3. In desktop app config, set `VITE_GITHUB_BROKER_URL=https://YOUR_HOST`.
+4. Click `Connect GitHub`. The app opens your system browser, broker exchanges the code, then redirects back to `chchchchanges://oauth/github`.
 
 Requested scopes: `repo read:user`.
 
-GitHub uses device flow so the public desktop app only needs a client ID and never ships a client secret.
+Do not ship `GITHUB_CLIENT_SECRET` in the desktop app.
 
 ### Bitbucket
 

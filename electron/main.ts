@@ -3,11 +3,13 @@ import path from "node:path";
 
 const isDev = process.env.NODE_ENV !== "production" && !app.isPackaged;
 const appProtocol = "chchchchanges";
+const githubRedirectUri = `${appProtocol}://oauth/github`;
 const bitbucketRedirectUri = `${appProtocol}://oauth/bitbucket`;
+type OAuthPayload = { state: string; access_token?: string; expires_in?: string; token_type?: string; error?: string };
+const pendingGitHubStates = new Map<string, NodeJS.Timeout>();
 const pendingBitbucketStates = new Map<string, { timeout: NodeJS.Timeout; clientId: string }>();
-let pendingBitbucketCallback:
-  | { state: string; access_token?: string; expires_in?: string; token_type?: string; error?: string }
-  | undefined;
+let pendingGitHubCallback: OAuthPayload | undefined;
+let pendingBitbucketCallback: OAuthPayload | undefined;
 
 function registerAppProtocol() {
   if (process.defaultApp && process.argv.length >= 2) {
@@ -25,7 +27,7 @@ if (!singleInstanceLock) {
   app.on("second-instance", (_event, argv) => {
     const deepLink = argv.find((arg) => arg.startsWith(`${appProtocol}://`));
     if (deepLink) {
-      void handleBitbucketCallback(deepLink);
+      void handleOAuthCallback(deepLink);
     }
     const focusedWindow = BrowserWindow.getAllWindows()[0];
     if (focusedWindow) {
@@ -35,19 +37,28 @@ if (!singleInstanceLock) {
   });
 }
 
-async function handleBitbucketCallback(url: string) {
-  if (!url.startsWith(bitbucketRedirectUri)) return false;
-  console.log(`[oauth] bitbucket callback received: ${url.replace(/access_token=[^&#]+/, "access_token=<redacted>")}`);
+async function handleOAuthCallback(url: string) {
+  const provider = url.startsWith(githubRedirectUri) ? "github" : url.startsWith(bitbucketRedirectUri) ? "bitbucket" : "";
+  if (!provider) return false;
+  console.log(`[oauth] ${provider} callback received: ${url.replace(/access_token=[^&#]+/, "access_token=<redacted>")}`);
   const parsed = new URL(url);
   const params = parsed.hash ? new URLSearchParams(parsed.hash.slice(1)) : parsed.searchParams;
   const state = params.get("state") ?? "";
-  const pending = pendingBitbucketStates.get(state);
-  if (pending) {
-    clearTimeout(pending.timeout);
-    pendingBitbucketStates.delete(state);
+  if (provider === "github") {
+    const timeout = pendingGitHubStates.get(state);
+    if (timeout) {
+      clearTimeout(timeout);
+      pendingGitHubStates.delete(state);
+    }
+  } else {
+    const pending = pendingBitbucketStates.get(state);
+    if (pending) {
+      clearTimeout(pending.timeout);
+      pendingBitbucketStates.delete(state);
+    }
   }
 
-  let payload: { state: string; access_token?: string; expires_in?: string; token_type?: string; error?: string } = {
+  let payload: OAuthPayload = {
     state,
     access_token: params.get("access_token") ?? undefined,
     expires_in: params.get("expires_in") ?? undefined,
@@ -56,17 +67,18 @@ async function handleBitbucketCallback(url: string) {
   };
 
   const code = params.get("code");
-  if (!payload.access_token && !payload.error && code) {
+  if (provider === "bitbucket" && !payload.access_token && !payload.error && code) {
     payload = {
       state,
       error:
         "Bitbucket returned an authorization code. Bitbucket Cloud requires a client secret to exchange that code, so public desktop OAuth needs a hosted broker.",
     };
   }
-  pendingBitbucketCallback = payload;
+  if (provider === "github") pendingGitHubCallback = payload;
+  if (provider === "bitbucket") pendingBitbucketCallback = payload;
 
   for (const window of BrowserWindow.getAllWindows()) {
-    window.webContents.send("oauth:bitbucket-callback", payload);
+    window.webContents.send(`oauth:${provider}-callback`, payload);
     if (window.isMinimized()) window.restore();
     window.focus();
   }
@@ -155,6 +167,32 @@ ipcMain.handle("oauth:github-device-poll", async (_event, clientId: string, devi
   return (await response.json()) as GitHubTokenResponse;
 });
 
+ipcMain.handle("oauth:github-broker", async (_event, clientId: string, brokerUrl?: string) => {
+  const state = crypto.randomUUID();
+  pendingGitHubCallback = undefined;
+  const timeout = setTimeout(() => pendingGitHubStates.delete(state), 180000);
+  pendingGitHubStates.set(state, timeout);
+
+  const authUrl = brokerUrl
+    ? new URL("/api/github/start", brokerUrl)
+    : new URL("https://github.com/login/oauth/authorize");
+  if (brokerUrl) {
+    authUrl.searchParams.set("state", state);
+    authUrl.searchParams.set("redirect_uri", githubRedirectUri);
+  } else {
+    authUrl.searchParams.set("client_id", clientId);
+    authUrl.searchParams.set("redirect_uri", githubRedirectUri);
+    authUrl.searchParams.set("scope", "repo read:user");
+    authUrl.searchParams.set("state", state);
+  }
+  console.log(`[oauth] opening github auth via ${brokerUrl ? "broker" : "direct"} with state ${state}`);
+  void shell.openExternal(authUrl.toString());
+
+  return { state };
+});
+
+ipcMain.handle("oauth:github-pending-callback", async () => pendingGitHubCallback);
+
 ipcMain.handle("oauth:bitbucket-implicit", async (_event, clientId: string, brokerUrl?: string) => {
   const state = crypto.randomUUID();
   pendingBitbucketCallback = undefined;
@@ -188,7 +226,7 @@ if (singleInstanceLock) {
 
 app.on("open-url", (event, url) => {
   event.preventDefault();
-  void handleBitbucketCallback(url);
+  void handleOAuthCallback(url);
 });
 
 app.on("activate", () => {
