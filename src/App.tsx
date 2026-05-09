@@ -15,7 +15,6 @@ import {
   GitPullRequestArrow,
   MessageSquarePlus,
   PanelLeft,
-  RefreshCw,
   Search,
   Send,
 } from "lucide-react";
@@ -633,17 +632,13 @@ export function App() {
 
             <div className="provider-connect-list">
               {connectView === "github" && (
-                <div className="provider-connect-row">
-                  <div>
-                    <strong>GitHub</strong>
-                    <span>{settings.githubConnections.length} connected</span>
-                  </div>
+                <div className="connect-action-panel">
                   <button
-                    className="link-button"
+                    className="approve"
                     onClick={connectGitHub}
                     disabled={!oauthConfig.githubClientId && !oauthConfig.githubBrokerUrl}
                   >
-                    Connect account
+                    Connect GitHub account
                   </button>
                 </div>
               )}
@@ -659,20 +654,16 @@ export function App() {
                       autoFocus
                     />
                   </label>
-                  <div className="provider-connect-row bitbucket-row">
-                    <div>
-                      <strong>Bitbucket</strong>
-                      <span>Workspace required</span>
-                    </div>
+                  <div className="connect-action-panel">
                     <button
-                      className="link-button"
+                      className="approve"
                       onClick={connectBitbucket}
                       disabled={
                         (!oauthConfig.bitbucketClientId && !oauthConfig.bitbucketBrokerUrl) ||
                         !settings.bitbucketWorkspaces.trim()
                       }
                     >
-                      Connect workspace
+                      Connect Bitbucket account
                     </button>
                   </div>
                 </>
@@ -682,10 +673,6 @@ export function App() {
             <footer>
               <button className="ghost" onClick={() => setConnectView(null)}>
                 Cancel
-              </button>
-              <button className="ghost" onClick={() => void refreshPullRequests()}>
-                <RefreshCw size={14} />
-                {isLoading ? "Refreshing" : "Refresh"}
               </button>
               {oauthStatus && <p>{oauthStatus}</p>}
             </footer>
