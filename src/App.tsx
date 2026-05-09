@@ -7,7 +7,9 @@ import css from "highlight.js/lib/languages/css";
 import json from "highlight.js/lib/languages/json";
 import {
   CheckCircle2,
+  CheckSquare2,
   ChevronDown,
+  X,
   CircleDot,
   Code2,
   GitPullRequestArrow,
@@ -16,7 +18,6 @@ import {
   RefreshCw,
   Search,
   Send,
-  Settings,
 } from "lucide-react";
 import { getCommentLineKey, languageFromPath, parseUnifiedDiff } from "./diff";
 import { loadAllPullRequests, providers } from "./providers";
@@ -151,7 +152,7 @@ export function App() {
   const [activeLineKey, setActiveLineKey] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [settings, setSettings] = useState<AccountSettings>(loadStoredSettings);
-  const [settingsOpen, setSettingsOpen] = useState(true);
+  const [connectOpen, setConnectOpen] = useState(false);
   const [loadErrors, setLoadErrors] = useState<string[]>([]);
   const [usingDemo, setUsingDemo] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
@@ -216,6 +217,11 @@ export function App() {
 
   async function connectBitbucket() {
     try {
+      if (!settings.bitbucketWorkspaces.trim()) {
+        setOauthStatus("Bitbucket workspace is required before connecting.");
+        setConnectOpen(true);
+        return;
+      }
       const clientId = oauthConfig.bitbucketClientId || settings.bitbucketClientId;
       if (!clientId.trim() && !oauthConfig.bitbucketBrokerUrl) {
         setOauthStatus("Missing Bitbucket client ID or broker URL. Add VITE_BITBUCKET_BROKER_URL for hosted auth.");
@@ -367,40 +373,6 @@ export function App() {
           ))}
         </div>
 
-        <section className="account-panel">
-          <button className="account-toggle" onClick={() => setSettingsOpen((value) => !value)}>
-            <Settings size={15} />
-            <span>Personal accounts</span>
-            <strong>{settings.githubToken || settings.bitbucketAccessToken ? "Connected" : "Demo"}</strong>
-          </button>
-          {settingsOpen && (
-            <div className="account-fields">
-              <button className="ghost" onClick={connectGitHub} disabled={!oauthConfig.githubClientId}>
-                Connect GitHub
-                {!oauthConfig.githubClientId && " (not configured)"}
-              </button>
-
-              <label>
-                Bitbucket workspaces
-                <input
-                  value={settings.bitbucketWorkspaces}
-                  onChange={(event) => updateSettings({ bitbucketWorkspaces: event.target.value })}
-                  placeholder="workspace-slug,another-workspace"
-                />
-              </label>
-              <button className="ghost" onClick={connectBitbucket} disabled={!oauthConfig.bitbucketClientId}>
-                Connect Bitbucket
-                {!oauthConfig.bitbucketClientId && " (not configured)"}
-              </button>
-              <button className="ghost" onClick={() => void refreshPullRequests()}>
-                <RefreshCw size={14} />
-                {isLoading ? "Refreshing" : "Refresh"}
-              </button>
-              {oauthStatus && <p>{oauthStatus}</p>}
-            </div>
-          )}
-        </section>
-
         {(usingDemo || loadErrors.length > 0) && (
           <div className="notice">
             {usingDemo && <p>Demo PRs shown until OAuth account connects.</p>}
@@ -454,6 +426,9 @@ export function App() {
                 </p>
               </div>
               <div className="review-actions">
+                <button className="ghost" onClick={() => setConnectOpen(true)}>
+                  Connect
+                </button>
                 <button className="ghost">
                   <PanelLeft size={16} />
                   Files {selectedPr.files.length}
@@ -499,6 +474,86 @@ export function App() {
           <div className="empty-state">No pull requests loaded.</div>
         )}
       </main>
+
+      {connectOpen && (
+        <div className="modal-backdrop" role="presentation" onMouseDown={() => setConnectOpen(false)}>
+          <section
+            className="connect-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="connect-title"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <header>
+              <div>
+                <h2 id="connect-title">Connect accounts</h2>
+                <p>Choose providers to load pull requests.</p>
+              </div>
+              <button className="icon-button" onClick={() => setConnectOpen(false)} aria-label="Close">
+                <X size={18} />
+              </button>
+            </header>
+
+            <div className="provider-connect-list">
+              <div className="provider-connect-row">
+                <div>
+                  <strong>GitHub</strong>
+                  <span>{settings.githubToken ? "Connected" : "Not connected"}</span>
+                </div>
+                {settings.githubToken ? (
+                  <CheckSquare2 className="connected-check" size={22} />
+                ) : (
+                  <button
+                    className="link-button"
+                    onClick={connectGitHub}
+                    disabled={!oauthConfig.githubClientId && !oauthConfig.githubBrokerUrl}
+                  >
+                    Connect
+                  </button>
+                )}
+              </div>
+
+              <div className="provider-connect-row bitbucket-row">
+                <div>
+                  <strong>Bitbucket</strong>
+                  <span>{settings.bitbucketAccessToken ? "Connected" : "Not connected"}</span>
+                </div>
+                {settings.bitbucketAccessToken ? (
+                  <CheckSquare2 className="connected-check" size={22} />
+                ) : (
+                  <button
+                    className="link-button"
+                    onClick={connectBitbucket}
+                    disabled={
+                      (!oauthConfig.bitbucketClientId && !oauthConfig.bitbucketBrokerUrl) ||
+                      !settings.bitbucketWorkspaces.trim()
+                    }
+                  >
+                    Connect
+                  </button>
+                )}
+              </div>
+
+              <label className="workspace-field">
+                Bitbucket workspace
+                <input
+                  value={settings.bitbucketWorkspaces}
+                  onChange={(event) => updateSettings({ bitbucketWorkspaces: event.target.value })}
+                  placeholder="workspace-slug,another-workspace"
+                />
+              </label>
+            </div>
+
+            <footer>
+              <button className="ghost" onClick={() => void refreshPullRequests()}>
+                <RefreshCw size={14} />
+                {isLoading ? "Refreshing" : "Refresh"}
+              </button>
+              {oauthStatus && <p>{oauthStatus}</p>}
+            </footer>
+          </section>
+        </div>
+      )}
     </div>
   );
 }
