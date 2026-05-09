@@ -1,6 +1,6 @@
 cask "chchchchanges" do
-  version "1.0.0"
-  sha256 "0901a2be5e89158132758990ac4eeb5b1bac01e47d5a8aee6e5ca3b599303398"
+  version "1.0.1"
+  sha256 "d8310e3a9eea09c38e17012d8b3a9e0ef215936ab63efeb76a084d8ad2631e6e"
 
   url "https://github.com/AndrewVos/chchchchanges/releases/download/v#{version}/Chchchchanges-#{version}-mac-universal.dmg",
       verified: "github.com/AndrewVos/chchchchanges/"
