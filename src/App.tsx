@@ -655,7 +655,7 @@ export function App() {
                   onClick={connectGitHub}
                   disabled={!oauthConfig.githubClientId && !oauthConfig.githubBrokerUrl}
                 >
-                  Connect GitHub account
+                  Connect
                 </button>
               )}
               {connectView === "bitbucket" && (
@@ -667,7 +667,7 @@ export function App() {
                     !settings.bitbucketWorkspaces.trim()
                   }
                 >
-                  Connect Bitbucket account
+                  Connect
                 </button>
               )}
             </footer>
