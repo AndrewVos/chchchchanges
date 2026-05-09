@@ -10,9 +10,13 @@ export type PullRequestSummary = {
   repo: string;
   number: number;
   title: string;
+  description?: string;
+  url?: string;
   author: string;
   branch: string;
+  branchUrl?: string;
   target: string;
+  targetUrl?: string;
   updatedAt: string;
   additions: number;
   deletions: number;

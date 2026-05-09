@@ -13,11 +13,13 @@ import {
   CircleDot,
   Code2,
   GitPullRequestArrow,
+  Loader2,
   MessageSquarePlus,
   PanelLeft,
   Search,
   Send,
   Settings,
+  XCircle,
 } from "lucide-react";
 import { siBitbucket, siGithub } from "simple-icons";
 import { getCommentLineKey, languageFromPath, parseUnifiedDiff } from "./diff";
@@ -81,6 +83,8 @@ const providerLabel: Record<ProviderKind, string> = {
 };
 
 type PullRequestScope = "all" | "reviewer" | "author" | "assignee" | "mentioned" | "participant";
+type ToastTone = "info" | "success" | "error";
+type Toast = { id: string; message: string; tone: ToastTone };
 
 const scopeFilters: Array<{ value: PullRequestScope; label: string; role?: PullRequestViewerRole }> = [
   { value: "all", label: "All" },
@@ -121,6 +125,9 @@ const controls = {
   link:
     "cursor-pointer border-0 bg-transparent font-bold text-sky-300 underline underline-offset-[3px] disabled:cursor-not-allowed disabled:opacity-55",
 };
+
+const externalLinkClasses =
+  "cursor-pointer rounded-[4px] text-inherit no-underline transition-colors hover:text-[#7dd3fc] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#7dd3fc]";
 
 const providerPillClasses: Record<ProviderKind, string> = {
   github: "bg-emerald-300/15 text-emerald-200",
@@ -220,6 +227,18 @@ function highlightCode(code: string, language: string) {
   }
 }
 
+function plainTextDescription(value: string) {
+  return value
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/!\[[^\]]*]\([^)]*\)/g, "")
+    .replace(/\[([^\]]+)]\([^)]*\)/g, "$1")
+    .replace(/^#{1,6}\s+/gm, "")
+    .replace(/[*_~>#-]/g, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 function stateLabel(state: PullRequestSummary["state"]) {
   if (state === "changes-requested") return "Changes requested";
   if (state === "approved") return "Approved";
@@ -241,10 +260,10 @@ export function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsPage, setSettingsPage] = useState<"general" | "connections">("general");
   const [connectView, setConnectView] = useState<"github" | "bitbucket" | null>(null);
-  const [loadErrors, setLoadErrors] = useState<string[]>([]);
+  const [connectingProvider, setConnectingProvider] = useState<"github" | "bitbucket" | null>(null);
+  const [toasts, setToasts] = useState<Toast[]>([]);
   const [usingDemo, setUsingDemo] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
-  const [oauthStatus, setOauthStatus] = useState("");
 
   useEffect(() => {
     void refreshPullRequests(settings);
@@ -254,6 +273,18 @@ export function App() {
     localStorage.setItem("reviewDesk.accounts", JSON.stringify(settings));
   }, [settings]);
 
+  useEffect(() => {
+    if (toasts.length === 0) return;
+    const timeout = window.setTimeout(() => {
+      setToasts((items) => items.slice(1));
+    }, 6500);
+    return () => window.clearTimeout(timeout);
+  }, [toasts]);
+
+  function showToast(message: string, tone: ToastTone = "info") {
+    setToasts((items) => [...items.slice(-2), { id: crypto.randomUUID(), message, tone }]);
+  }
+
   async function refreshPullRequests(nextSettings = settings) {
     setIsLoading(true);
     try {
@@ -262,7 +293,7 @@ export function App() {
         setSettings(result.updatedSettings);
       }
       setPullRequests(result.pullRequests);
-      setLoadErrors(result.errors);
+      result.errors.forEach((error) => showToast(error, "error"));
       setUsingDemo(result.usingDemo);
       setSelectedPrId(result.pullRequests[0]?.id ?? "");
       setSelectedFilePath(result.pullRequests[0]?.files[0]?.path ?? "");
@@ -289,16 +320,17 @@ export function App() {
 
   async function connectGitHub() {
     try {
+      setConnectingProvider("github");
       const clientId = oauthConfig.githubClientId || settings.githubClientId;
       if (!clientId.trim() && !oauthConfig.githubBrokerUrl) {
-        setOauthStatus("Missing GitHub client ID or broker URL. Add VITE_GITHUB_BROKER_URL for hosted auth.");
+        showToast("Missing GitHub client ID or broker URL. Add VITE_GITHUB_BROKER_URL for hosted auth.", "error");
         return;
       }
       if (!window.reviewDesk) {
-        setOauthStatus("OAuth connect needs Electron app, not browser preview.");
+        showToast("OAuth connect needs Electron app, not browser preview.", "error");
         return;
       }
-      setOauthStatus("Opening GitHub login in your browser...");
+      showToast("Opening GitHub login in your browser...");
       const { state } = await window.reviewDesk.connectGitHub(
         clientId.trim() || "broker",
         oauthConfig.githubBrokerUrl || undefined,
@@ -316,32 +348,35 @@ export function App() {
       ];
       const next = { ...settings, githubToken: "", githubConnections };
       setSettings(next);
-      setOauthStatus("GitHub connected.");
+      showToast("GitHub connected.", "success");
       await refreshPullRequests(next);
       setConnectView(null);
     } catch (error) {
-      setOauthStatus(error instanceof Error ? error.message : "GitHub OAuth failed.");
+      showToast(error instanceof Error ? error.message : "GitHub OAuth failed.", "error");
+    } finally {
+      setConnectingProvider(null);
     }
   }
 
   async function connectBitbucket() {
     try {
+      setConnectingProvider("bitbucket");
       if (!settings.bitbucketWorkspaces.trim()) {
-        setOauthStatus("Bitbucket workspace is required before connecting.");
+        showToast("Bitbucket workspace is required before connecting.", "error");
         setConnectView("bitbucket");
         setSettingsOpen(false);
         return;
       }
       const clientId = oauthConfig.bitbucketClientId || settings.bitbucketClientId;
       if (!clientId.trim() && !oauthConfig.bitbucketBrokerUrl) {
-        setOauthStatus("Missing Bitbucket client ID or broker URL. Add VITE_BITBUCKET_BROKER_URL for hosted auth.");
+        showToast("Missing Bitbucket client ID or broker URL. Add VITE_BITBUCKET_BROKER_URL for hosted auth.", "error");
         return;
       }
       if (!window.reviewDesk) {
-        setOauthStatus("OAuth connect needs Electron app, not browser preview.");
+        showToast("OAuth connect needs Electron app, not browser preview.", "error");
         return;
       }
-      setOauthStatus("Opening Bitbucket login in your browser...");
+      showToast("Opening Bitbucket login in your browser...");
       const { state } = await window.reviewDesk.connectBitbucket(
         clientId.trim() || "broker",
         oauthConfig.bitbucketBrokerUrl || undefined,
@@ -369,11 +404,13 @@ export function App() {
       ];
       const next = { ...settings, bitbucketAccessToken: "", bitbucketConnections };
       setSettings(next);
-      setOauthStatus("Bitbucket connected.");
+      showToast("Bitbucket connected.", "success");
       await refreshPullRequests(next);
       setConnectView(null);
     } catch (error) {
-      setOauthStatus(error instanceof Error ? error.message : "Bitbucket OAuth failed.");
+      showToast(error instanceof Error ? error.message : "Bitbucket OAuth failed.", "error");
+    } finally {
+      setConnectingProvider(null);
     }
   }
 
@@ -391,7 +428,7 @@ export function App() {
             bitbucketConnections: settings.bitbucketConnections.filter((connection) => connection.workspace !== id),
           };
     setSettings(next);
-    setOauthStatus(`${providerLabel[provider]} disconnected.`);
+    showToast(`${providerLabel[provider]} disconnected.`);
     await refreshPullRequests(next);
   }
 
@@ -444,6 +481,7 @@ export function App() {
   const selectedPr = visiblePullRequests.find((pr) => pr.id === selectedPrId) ?? visiblePullRequests[0];
   const selectedFile =
     selectedPr?.files.find((file) => file.path === selectedFilePath) ?? selectedPr?.files[0];
+  const selectedDescription = selectedPr?.description ? plainTextDescription(selectedPr.description) : "";
   const hasConnectedAccounts = settings.githubConnections.length > 0 || settings.bitbucketConnections.length > 0;
   const isFiltered = selectedProvider !== "all" || selectedScope !== "all" || query.trim().length > 0;
 
@@ -488,19 +526,30 @@ export function App() {
     }
   }
 
+  function openExternal(event: React.MouseEvent<HTMLAnchorElement>, url: string | undefined) {
+    if (!url) {
+      event.preventDefault();
+      return;
+    }
+    if (window.reviewDesk) {
+      event.preventDefault();
+      window.open(url, "_blank", "noopener,noreferrer");
+    }
+  }
+
   return (
-    <div className="grid min-h-screen grid-cols-[340px_minmax(0,1fr)] bg-[#101319] text-[#e7edf4] max-[1040px]:grid-cols-[300px_minmax(0,1fr)]">
-      <aside className="flex min-h-screen flex-col gap-[18px] border-r border-[#26313d] bg-[#141a22] px-[18px] pb-[18px] pt-[26px]">
-        <div className="flex items-center gap-3 pl-1.5">
-          <div className="grid size-[42px] place-items-center rounded-lg border border-[#3b4858] bg-[#1d2631] text-[#6ee7b7]">
+    <div className="grid h-screen overflow-hidden grid-cols-[340px_minmax(0,1fr)] bg-[#101319] text-[#e7edf4] max-[1040px]:grid-cols-[300px_minmax(0,1fr)]">
+      <aside className="flex h-screen min-h-0 flex-col gap-[18px] overflow-hidden border-r border-[#26313d] bg-[#141a22] px-5 pb-[18px] pt-8">
+        <div className="flex min-h-[54px] items-center gap-3 rounded-lg px-1">
+          <div className="grid size-11 shrink-0 place-items-center rounded-lg border border-[#3b4858] bg-[#1d2631] text-[#6ee7b7]">
             <GitPullRequestArrow size={20} />
           </div>
-          <div>
-            <strong className="block text-[17px] tracking-normal">Chchchchanges</strong>
-            <span className="block text-[13px] text-[#91a0af]">Pull request review</span>
+          <div className="min-w-0 flex-1">
+            <strong className="block truncate text-[17px] leading-5 tracking-normal">Chchchchanges</strong>
+            <span className="mt-1 block truncate text-[13px] leading-4 text-[#91a0af]">Pull request review</span>
           </div>
           <button
-            className="ml-auto grid size-9 cursor-pointer place-items-center rounded-lg border border-[#334253] bg-[#151d26] text-[#c8d3df]"
+            className="ml-2 grid size-9 shrink-0 cursor-pointer place-items-center rounded-lg border border-[#334253] bg-[#151d26] text-[#c8d3df]"
             onClick={() => {
               setSettingsPage("general");
               setSettingsOpen(true);
@@ -524,7 +573,7 @@ export function App() {
         <div className="grid grid-cols-3 gap-1.5 rounded-lg bg-[#0f141b] p-[5px]" aria-label="Provider filter">
           <button
             className={cn(
-              "h-8 cursor-pointer rounded-md border-0 bg-transparent text-[#91a0af]",
+              "min-h-8 cursor-pointer rounded-md border-0 bg-transparent px-2.5 text-[12px] text-[#91a0af]",
               selectedProvider === "all" && "bg-[#253241] text-[#f7fafc]",
             )}
             onClick={() => setSelectedProvider("all")}
@@ -535,7 +584,7 @@ export function App() {
             <button
               key={provider.kind}
               className={cn(
-                "h-8 cursor-pointer rounded-md border-0 bg-transparent text-[#91a0af]",
+                "min-h-8 cursor-pointer rounded-md border-0 bg-transparent px-2.5 text-[12px] text-[#91a0af]",
                 selectedProvider === provider.kind && "bg-[#253241] text-[#f7fafc]",
               )}
               onClick={() => setSelectedProvider(provider.kind)}
@@ -559,16 +608,6 @@ export function App() {
             </button>
           ))}
         </div>
-
-        {loadErrors.length > 0 && (
-          <div className="flex flex-col gap-1.5 rounded-lg border border-[#665a34] bg-[#f0cf78]/10 px-3 py-2.5">
-            {loadErrors.map((error) => (
-              <p className="m-0 text-xs leading-[1.4] text-[#f0cf78]" key={error}>
-                {error}
-              </p>
-            ))}
-          </div>
-        )}
 
         <div className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-auto pr-0.5">
           {visiblePullRequests.map((pr) => (
@@ -618,7 +657,7 @@ export function App() {
         </div>
       </aside>
 
-      <main className="min-h-screen min-w-0 p-[26px]">
+      <main className="h-screen min-w-0 overflow-auto p-[26px]">
         {selectedPr && selectedFile ? (
           <>
             <header className="mb-5 flex items-start justify-between gap-6">
@@ -628,11 +667,45 @@ export function App() {
                   <ChevronDown size={14} />
                   <span>{selectedPr.repo}</span>
                 </div>
-                <h1 className="my-2 max-w-[920px] text-[28px] leading-[1.15] tracking-normal">{selectedPr.title}</h1>
+                <h1 className="my-2 max-w-[920px] text-[28px] leading-[1.15] tracking-normal">
+                  <a
+                    className={externalLinkClasses}
+                    href={selectedPr.url}
+                    onClick={(event) => openExternal(event, selectedPr.url)}
+                  >
+                    {selectedPr.title}
+                  </a>
+                </h1>
                 <p className="m-0 text-[#9eacba]">
-                  #{selectedPr.number} from <strong>{selectedPr.branch}</strong> into{" "}
-                  <strong>{selectedPr.target}</strong>
+                  <a
+                    className={externalLinkClasses}
+                    href={selectedPr.url}
+                    onClick={(event) => openExternal(event, selectedPr.url)}
+                  >
+                    #{selectedPr.number}
+                  </a>{" "}
+                  from{" "}
+                  <a
+                    className={externalLinkClasses}
+                    href={selectedPr.branchUrl}
+                    onClick={(event) => openExternal(event, selectedPr.branchUrl)}
+                  >
+                    <strong>{selectedPr.branch}</strong>
+                  </a>{" "}
+                  into{" "}
+                  <a
+                    className={externalLinkClasses}
+                    href={selectedPr.targetUrl}
+                    onClick={(event) => openExternal(event, selectedPr.targetUrl)}
+                  >
+                    <strong>{selectedPr.target}</strong>
+                  </a>
                 </p>
+                {selectedDescription && (
+                  <p className="mt-3 max-w-[920px] whitespace-pre-line text-[14px] leading-6 text-[#b5c1cd]">
+                    {selectedDescription}
+                  </p>
+                )}
               </div>
               <div className="flex gap-2.5">
                 <button className={controls.ghost}>
@@ -843,12 +916,18 @@ export function App() {
         <div
           className="fixed inset-0 z-20 grid place-items-center bg-[#05080c]/60 p-6"
           role="presentation"
-          onMouseDown={() => setConnectView(null)}
+          onMouseDown={() => {
+            if (!connectingProvider) setConnectView(null);
+          }}
         >
           <section
-            className="w-[min(460px,calc(100vw-32px))] rounded-lg border border-[#334253] bg-[#121923] text-[#e7edf4] shadow-2xl"
+            className={cn(
+              "relative w-[min(460px,calc(100vw-32px))] rounded-lg border border-[#334253] bg-[#121923] text-[#e7edf4] shadow-2xl",
+              connectingProvider && "pointer-events-none",
+            )}
             role="dialog"
             aria-modal="true"
+            aria-busy={Boolean(connectingProvider)}
             aria-labelledby="connect-title"
             onMouseDown={(event) => event.stopPropagation()}
           >
@@ -863,7 +942,12 @@ export function App() {
                   {connectView === "bitbucket" && "Choose a workspace, then authorize Bitbucket."}
                 </p>
               </div>
-              <button className={controls.icon} onClick={() => setConnectView(null)} aria-label="Close">
+              <button
+                className={controls.icon}
+                onClick={() => setConnectView(null)}
+                disabled={Boolean(connectingProvider)}
+                aria-label="Close"
+              >
                 <X size={18} />
               </button>
             </header>
@@ -873,10 +957,11 @@ export function App() {
                 <label className="mt-1 flex flex-col gap-[5px] text-[13px] text-[#91a0af]">
                   Bitbucket workspace
                   <input
-                    className="h-[38px] min-w-0 rounded-[7px] border border-[#334253] bg-[#0d1218] px-2.5 text-[#e7edf4] outline-none"
+                    className="h-[38px] min-w-0 rounded-[7px] border border-[#334253] bg-[#0d1218] px-2.5 text-[#e7edf4] outline-none disabled:cursor-not-allowed disabled:opacity-55"
                     value={settings.bitbucketWorkspaces}
                     onChange={(event) => updateSettings({ bitbucketWorkspaces: event.target.value })}
                     placeholder="workspace-slug"
+                    disabled={Boolean(connectingProvider)}
                     autoFocus
                   />
                 </label>
@@ -884,16 +969,17 @@ export function App() {
             </div>
 
             <footer className="flex items-center justify-between gap-4 border-t border-[#253241] p-4">
-              <button className={controls.ghost} onClick={() => setConnectView(null)}>
+              <button className={controls.ghost} onClick={() => setConnectView(null)} disabled={Boolean(connectingProvider)}>
                 Cancel
               </button>
               {connectView === "github" && (
                 <button
                   className={controls.primary}
                   onClick={connectGitHub}
-                  disabled={!oauthConfig.githubClientId && !oauthConfig.githubBrokerUrl}
+                  disabled={Boolean(connectingProvider) || (!oauthConfig.githubClientId && !oauthConfig.githubBrokerUrl)}
                 >
-                  Connect
+                  {connectingProvider === "github" && <Loader2 className="animate-spin" size={15} />}
+                  {connectingProvider === "github" ? "Connecting" : "Connect"}
                 </button>
               )}
               {connectView === "bitbucket" && (
@@ -901,17 +987,60 @@ export function App() {
                   className={controls.primary}
                   onClick={connectBitbucket}
                   disabled={
+                    Boolean(connectingProvider) ||
                     (!oauthConfig.bitbucketClientId && !oauthConfig.bitbucketBrokerUrl) ||
                     !settings.bitbucketWorkspaces.trim()
                   }
                 >
-                  Connect
+                  {connectingProvider === "bitbucket" && <Loader2 className="animate-spin" size={15} />}
+                  {connectingProvider === "bitbucket" ? "Connecting" : "Connect"}
                 </button>
               )}
             </footer>
+
+            {connectingProvider && (
+              <div className="absolute inset-0 grid place-items-center rounded-lg bg-[#121923]/72 backdrop-blur-[1px]">
+                <div className="inline-flex items-center gap-2.5 rounded-lg border border-[#334253] bg-[#151d26] px-3.5 py-2.5 text-sm font-bold text-[#e7edf4] shadow-2xl">
+                  <Loader2 className="animate-spin text-[#7dd3fc]" size={17} />
+                  Connecting {providerLabel[connectingProvider]}
+                </div>
+              </div>
+            )}
           </section>
         </div>
       )}
+
+      <div className="fixed right-5 top-5 z-30 flex w-[min(420px,calc(100vw-32px))] flex-col gap-2">
+        {toasts.map((toast) => (
+          <div
+            className={cn(
+              "flex items-start gap-3 rounded-lg border bg-[#121923] px-3.5 py-3 text-sm text-[#e7edf4] shadow-2xl",
+              toast.tone === "error" && "border-[#7f3333]",
+              toast.tone === "success" && "border-[#2f7a55]",
+              toast.tone === "info" && "border-[#334253]",
+            )}
+            key={toast.id}
+            role={toast.tone === "error" ? "alert" : "status"}
+          >
+            <span
+              className={cn(
+                "mt-1 size-2 shrink-0 rounded-full",
+                toast.tone === "error" && "bg-[#ff9b9b]",
+                toast.tone === "success" && "bg-[#7ddf9f]",
+                toast.tone === "info" && "bg-[#7dd3fc]",
+              )}
+            />
+            <p className="m-0 min-w-0 flex-1 leading-[1.35]">{toast.message}</p>
+            <button
+              className="grid size-6 shrink-0 cursor-pointer place-items-center rounded-md border-0 bg-transparent text-[#91a0af]"
+              onClick={() => setToasts((items) => items.filter((item) => item.id !== toast.id))}
+              aria-label="Dismiss notification"
+            >
+              <XCircle size={16} />
+            </button>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

@@ -143,9 +143,13 @@ const mockPullRequests: PullRequestSummary[] = [
     repo: "acme/review-hub",
     number: 1842,
     title: "Cache PR dashboard filters",
+    description: "Adds memoized filtering for the review dashboard and exposes filter settings for providers.",
+    url: "https://github.com/acme/review-hub/pull/1842",
     author: "maya",
     branch: "maya/cache-review-filters",
+    branchUrl: "https://github.com/acme/review-hub/tree/maya/cache-review-filters",
     target: "main",
+    targetUrl: "https://github.com/acme/review-hub/tree/main",
     updatedAt: "12 min ago",
     additions: 32,
     deletions: 9,
@@ -178,9 +182,13 @@ const mockPullRequests: PullRequestSummary[] = [
     repo: "acme/identity",
     number: 1840,
     title: "Persist provider on sessions",
+    description: "Stores the provider on newly-created sessions so downstream audit logs can group events by source.",
+    url: "https://github.com/acme/identity/pull/1840",
     author: "niko",
     branch: "niko/provider-session",
+    branchUrl: "https://github.com/acme/identity/tree/niko/provider-session",
     target: "main",
+    targetUrl: "https://github.com/acme/identity/tree/main",
     updatedAt: "42 min ago",
     additions: 18,
     deletions: 7,
@@ -205,9 +213,13 @@ const mockPullRequests: PullRequestSummary[] = [
     repo: "platform/pipelines",
     number: 731,
     title: "Expose slow pipeline signal",
+    description: "Adds a slow-pipeline flag to the report payload and updates duration formatting.",
+    url: "https://bitbucket.org/platform/pipelines/pull-requests/731",
     author: "ren",
     branch: "ren/pipeline-attention",
+    branchUrl: "https://bitbucket.org/platform/pipelines/branch/ren/pipeline-attention",
     target: "develop",
+    targetUrl: "https://bitbucket.org/platform/pipelines/branch/develop",
     updatedAt: "1 hr ago",
     additions: 16,
     deletions: 5,
@@ -247,8 +259,9 @@ type GitHubFile = {
   patch?: string;
 };
 type GitHubPull = {
-  head: { ref: string };
-  base: { ref: string };
+  head: { ref: string; repo?: { html_url?: string } | null };
+  base: { ref: string; repo?: { html_url?: string } | null };
+  body?: string | null;
   additions: number;
   deletions: number;
   review_comments: number;
@@ -265,9 +278,20 @@ type BitbucketPull = {
   participants?: Array<{ user?: BitbucketUser }>;
   source?: { branch?: { name?: string } };
   destination?: { branch?: { name?: string } };
+  summary?: { raw?: string; markup?: string; html?: string };
   updated_on: string;
   comment_count?: number;
+  links?: { html?: { href?: string } };
 };
+
+function githubBranchUrl(repoUrl: string | undefined, branch: string) {
+  return repoUrl ? `${repoUrl}/tree/${encodeURI(branch)}` : undefined;
+}
+
+function bitbucketBranchUrl(repo: BitbucketRepo, branch: string | undefined) {
+  if (!branch) return undefined;
+  return `https://bitbucket.org/${repo.workspace.slug}/${repo.slug}/branch/${encodeURI(branch)}`;
+}
 
 function hasGitHub(settings: AccountSettings) {
   return getGitHubConnections(settings).length > 0;
@@ -413,9 +437,13 @@ async function loadGitHubPullRequestsForToken(token: string): Promise<PullReques
         repo: `${repoRef.owner}/${repoRef.repo}`,
         number: item.number,
         title: item.title,
+        description: pull.body?.trim() || undefined,
+        url: item.html_url,
         author: item.user.login,
         branch: pull.head.ref,
+        branchUrl: githubBranchUrl(pull.head.repo?.html_url, pull.head.ref),
         target: pull.base.ref,
+        targetUrl: githubBranchUrl(pull.base.repo?.html_url, pull.base.ref),
         updatedAt: formatDate(item.updated_at),
         additions: pull.additions,
         deletions: pull.deletions,
@@ -558,9 +586,13 @@ async function loadBitbucketWorkspacePullRequests(connection: BitbucketConnectio
         repo: repo.full_name,
         number: pull.id,
         title: pull.title,
+        description: pull.summary?.raw?.trim() || undefined,
+        url: pull.links?.html?.href ?? `https://bitbucket.org/${repo.workspace.slug}/${repo.slug}/pull-requests/${pull.id}`,
         author: pull.author?.display_name ?? pull.author?.nickname ?? "unknown",
         branch: pull.source?.branch?.name ?? "source",
+        branchUrl: bitbucketBranchUrl(repo, pull.source?.branch?.name),
         target: pull.destination?.branch?.name ?? "target",
+        targetUrl: bitbucketBranchUrl(repo, pull.destination?.branch?.name),
         updatedAt: formatDate(pull.updated_on),
         additions,
         deletions,
