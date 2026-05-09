@@ -1,4 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import ReactMarkdown, { type Components } from "react-markdown";
+import remarkGfm from "remark-gfm";
 import hljs from "highlight.js/lib/core";
 import javascript from "highlight.js/lib/languages/javascript";
 import typescript from "highlight.js/lib/languages/typescript";
@@ -15,15 +17,23 @@ import {
   GitPullRequestArrow,
   Loader2,
   MessageSquarePlus,
+  Monitor,
+  Moon,
   PanelLeft,
   Search,
   Send,
   Settings,
+  Sun,
   XCircle,
 } from "lucide-react";
 import { siBitbucket, siGithub } from "simple-icons";
 import { getCommentLineKey, languageFromPath, parseUnifiedDiff } from "./diff";
-import { loadAllPullRequests, providers } from "./providers";
+import {
+  loadAllPullRequests,
+  loadPullRequestFiles,
+  providers,
+  type LoadProgress,
+} from "./providers";
 import { appConfig } from "./config";
 import type {
   AccountSettings,
@@ -82,17 +92,19 @@ const providerLabel: Record<ProviderKind, string> = {
   bitbucket: "Bitbucket",
 };
 
-type PullRequestScope = "all" | "reviewer" | "author" | "assignee" | "mentioned" | "participant";
+type PullRequestScope = PullRequestViewerRole;
 type ToastTone = "info" | "success" | "error";
 type Toast = { id: string; message: string; tone: ToastTone };
+type ThemePreference = "system" | "light" | "dark";
+type ResolvedTheme = "light" | "dark";
+type ProviderProgressState = Record<ProviderKind, { completed: number; total: number }>;
 
-const scopeFilters: Array<{ value: PullRequestScope; label: string; role?: PullRequestViewerRole }> = [
-  { value: "all", label: "All" },
-  { value: "reviewer", label: "Needs my review", role: "reviewer" },
-  { value: "author", label: "Created by me", role: "author" },
-  { value: "assignee", label: "Assigned to me", role: "assignee" },
-  { value: "mentioned", label: "Mentions me", role: "mentioned" },
-  { value: "participant", label: "Participating", role: "participant" },
+const scopeFilters: Array<{ value: PullRequestScope; label: string }> = [
+  { value: "reviewer", label: "Needs my review" },
+  { value: "author", label: "Created by me" },
+  { value: "assignee", label: "Assigned to me" },
+  { value: "mentioned", label: "Mentions me" },
+  { value: "participant", label: "Participating" },
 ];
 
 const roleLabels: Record<PullRequestViewerRole, string> = {
@@ -103,8 +115,101 @@ const roleLabels: Record<PullRequestViewerRole, string> = {
   participant: "Participating",
 };
 
+function emptyProviderProgress(): ProviderProgressState {
+  return {
+    github: { completed: 0, total: 0 },
+    bitbucket: { completed: 0, total: 0 },
+  };
+}
+
 function cn(...classes: Array<string | false | null | undefined>) {
   return classes.filter(Boolean).join(" ");
+}
+
+function mergePullRequests(current: PullRequestSummary[], incoming: PullRequestSummary[]) {
+  const items = new Map(current.map((item) => [item.id, item]));
+  for (const pullRequest of incoming) {
+    const existing = items.get(pullRequest.id);
+    items.set(
+      pullRequest.id,
+      existing
+        ? {
+            ...existing,
+            ...pullRequest,
+            files: pullRequest.filesLoaded ? pullRequest.files : existing.filesLoaded ? existing.files : pullRequest.files,
+            filesLoaded: existing.filesLoaded || pullRequest.filesLoaded,
+            viewerRoles: [...new Set([...(existing.viewerRoles ?? []), ...(pullRequest.viewerRoles ?? [])])],
+          }
+        : pullRequest,
+    );
+  }
+  return [...items.values()];
+}
+
+function filterButtonClasses(active: boolean) {
+  return cn(
+    "min-h-8 cursor-pointer rounded-md border px-2.5 text-[12px]",
+    active
+      ? "border-[var(--filter-active-border)] bg-[var(--filter-active-bg)] text-[var(--filter-active-text)]"
+      : "border-transparent bg-transparent text-[var(--text-muted)]",
+  );
+}
+
+function loadThemePreference(): ThemePreference {
+  const stored = localStorage.getItem("reviewDesk.theme");
+  return stored === "light" || stored === "dark" || stored === "system" ? stored : "system";
+}
+
+function getSystemTheme(): ResolvedTheme {
+  return window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+}
+
+function nextThemePreference(value: ThemePreference): ThemePreference {
+  if (value === "system") return "light";
+  if (value === "light") return "dark";
+  return "system";
+}
+
+function themeVars(theme: ResolvedTheme): CSSProperties & Record<`--${string}`, string> {
+  const dark = theme === "dark";
+  return {
+    colorScheme: theme,
+    "--bg": dark ? "#101319" : "#f5f7fa",
+    "--sidebar": dark ? "#141a22" : "#eef2f7",
+    "--surface": dark ? "#121923" : "#ffffff",
+    "--surface-2": dark ? "#151d26" : "#f8fafc",
+    "--surface-3": dark ? "#0f141b" : "#e8edf3",
+    "--surface-4": dark ? "#1a2430" : "#dce6f0",
+    "--panel": dark ? "#0e141b" : "#ffffff",
+    "--panel-header": dark ? "#141c25" : "#f3f6fa",
+    "--diff-header": dark ? "#1b2734" : "#e9f1fb",
+    "--border": dark ? "#26313d" : "#d2dbe6",
+    "--border-strong": dark ? "#334253" : "#bdc9d6",
+    "--border-active": dark ? "#3d4f63" : "#9db4cc",
+    "--text": dark ? "#e7edf4" : "#17202a",
+    "--text-muted": dark ? "#91a0af" : "#64748b",
+    "--text-soft": dark ? "#c8d3df" : "#3f4f60",
+    "--text-card": dark ? "#dbe6f0" : "#263241",
+    "--accent": dark ? "#6ee7b7" : "#098461",
+    "--link": dark ? "#7dd3fc" : "#0369a1",
+    "--success": dark ? "#7ddf9f" : "#168753",
+    "--danger": dark ? "#ff9b9b" : "#c24141",
+    "--warning": dark ? "#f5d987" : "#9a6a00",
+    "--warning-bg": dark ? "rgba(240,207,120,0.10)" : "rgba(245,158,11,0.12)",
+    "--warning-border": dark ? "#665a34" : "#d69e2e",
+    "--primary-bg": dark ? "#173a30" : "#d7f5e8",
+    "--primary-border": dark ? "#2d6a55" : "#9fdcbe",
+    "--primary-text": dark ? "#a7f3d0" : "#116149",
+    "--primary-hover": dark ? "#1f493d" : "#c5efd8",
+    "--github-pill-bg": dark ? "rgba(110,231,183,0.15)" : "rgba(16,185,129,0.14)",
+    "--github-pill-text": dark ? "#a7f3d0" : "#047857",
+    "--bitbucket-pill-bg": dark ? "rgba(125,211,252,0.15)" : "rgba(14,165,233,0.14)",
+    "--bitbucket-pill-text": dark ? "#bae6fd" : "#0369a1",
+    "--filter-active-bg": dark ? "#253241" : "#cbd5e1",
+    "--filter-active-border": "transparent",
+    "--filter-active-text": dark ? "#f7fafc" : "#17202a",
+    "--overlay": dark ? "rgba(5,8,12,0.60)" : "rgba(15,23,42,0.28)",
+  } as CSSProperties & Record<`--${string}`, string>;
 }
 
 function BrandIcon({ icon, className }: { icon: SimpleIcon; className?: string }) {
@@ -117,21 +222,23 @@ function BrandIcon({ icon, className }: { icon: SimpleIcon; className?: string }
 
 const controls = {
   ghost:
-    "inline-flex min-h-9 cursor-pointer items-center justify-center gap-2 rounded-lg border border-[#334253] bg-[#151d26] px-3 text-[#c8d3df] disabled:cursor-not-allowed disabled:opacity-55",
+    "inline-flex min-h-9 cursor-pointer items-center justify-center gap-2 rounded-lg border border-[var(--border-strong)] bg-[var(--surface-2)] px-3 text-[var(--text-soft)] disabled:cursor-not-allowed disabled:opacity-55",
   primary:
-    "inline-flex min-h-9 cursor-pointer items-center justify-center gap-2 rounded-lg border border-[#31b77a] bg-[#29a96f] px-3 font-bold text-[#06140e] disabled:cursor-not-allowed disabled:opacity-55",
+    "inline-flex min-h-9 cursor-pointer items-center justify-center gap-2 rounded-lg border border-[var(--primary-border)] bg-[var(--primary-bg)] px-3 font-bold text-[var(--primary-text)] transition-colors hover:bg-[var(--primary-hover)] disabled:cursor-not-allowed disabled:opacity-55",
+  success:
+    "inline-flex min-h-9 cursor-pointer items-center justify-center gap-2 rounded-lg border border-[var(--border-strong)] bg-[var(--surface-2)] px-3 font-bold text-[var(--success)] transition-colors hover:bg-[var(--surface-4)] disabled:cursor-not-allowed disabled:opacity-55",
   icon:
-    "grid size-[34px] cursor-pointer place-items-center rounded-lg border border-[#334253] bg-[#151d26] text-[#c8d3df] disabled:cursor-not-allowed disabled:opacity-55",
+    "grid size-[34px] cursor-pointer place-items-center rounded-lg border border-[var(--border-strong)] bg-[var(--surface-2)] text-[var(--text-soft)] disabled:cursor-not-allowed disabled:opacity-55",
   link:
-    "cursor-pointer border-0 bg-transparent font-bold text-sky-300 underline underline-offset-[3px] disabled:cursor-not-allowed disabled:opacity-55",
+    "cursor-pointer border-0 bg-transparent font-bold text-[var(--link)] underline underline-offset-[3px] disabled:cursor-not-allowed disabled:opacity-55",
 };
 
 const externalLinkClasses =
-  "cursor-pointer rounded-[4px] text-inherit no-underline transition-colors hover:text-[#7dd3fc] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#7dd3fc]";
+  "cursor-pointer rounded-[4px] text-inherit no-underline transition-colors hover:text-[var(--link)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color:var(--link)]";
 
 const providerPillClasses: Record<ProviderKind, string> = {
-  github: "bg-emerald-300/15 text-emerald-200",
-  bitbucket: "bg-sky-300/15 text-sky-200",
+  github: "bg-[var(--github-pill-bg)] text-[var(--github-pill-text)]",
+  bitbucket: "bg-[var(--bitbucket-pill-bg)] text-[var(--bitbucket-pill-text)]",
 };
 
 const diffRowClasses: Record<DiffLine["kind"], string> = {
@@ -142,10 +249,10 @@ const diffRowClasses: Record<DiffLine["kind"], string> = {
 };
 
 const diffMarkerClasses: Record<DiffLine["kind"], string> = {
-  addition: "text-[#7ddf9f]",
-  deletion: "text-[#ff9b9b]",
-  context: "text-[#91a0af]",
-  meta: "text-[#91a0af]",
+  addition: "text-[var(--success)]",
+  deletion: "text-[var(--danger)]",
+  context: "text-[var(--text-muted)]",
+  meta: "text-[var(--text-muted)]",
 };
 
 const initialComments: ReviewComment[] = [
@@ -227,18 +334,6 @@ function highlightCode(code: string, language: string) {
   }
 }
 
-function plainTextDescription(value: string) {
-  return value
-    .replace(/```[\s\S]*?```/g, " ")
-    .replace(/`([^`]+)`/g, "$1")
-    .replace(/!\[[^\]]*]\([^)]*\)/g, "")
-    .replace(/\[([^\]]+)]\([^)]*\)/g, "$1")
-    .replace(/^#{1,6}\s+/gm, "")
-    .replace(/[*_~>#-]/g, "")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
-}
-
 function stateLabel(state: PullRequestSummary["state"]) {
   if (state === "changes-requested") return "Changes requested";
   if (state === "approved") return "Approved";
@@ -246,10 +341,15 @@ function stateLabel(state: PullRequestSummary["state"]) {
   return "Waiting";
 }
 
+function loadPercent(progress: { completed: number; total: number }) {
+  if (progress.total <= 0) return 0;
+  return Math.min(100, Math.max(0, Math.round((progress.completed / progress.total) * 100)));
+}
+
 export function App() {
   const [pullRequests, setPullRequests] = useState<PullRequestSummary[]>([]);
   const [selectedProvider, setSelectedProvider] = useState<ProviderKind | "all">("all");
-  const [selectedScope, setSelectedScope] = useState<PullRequestScope>("all");
+  const [selectedScope, setSelectedScope] = useState<PullRequestScope>("reviewer");
   const [selectedPrId, setSelectedPrId] = useState<string>("");
   const [selectedFilePath, setSelectedFilePath] = useState<string>("");
   const [query, setQuery] = useState("");
@@ -264,6 +364,16 @@ export function App() {
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [usingDemo, setUsingDemo] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [providerProgress, setProviderProgress] = useState<ProviderProgressState>(emptyProviderProgress);
+  const [loadingFileIds, setLoadingFileIds] = useState<Set<string>>(() => new Set());
+  const [failedFileIds, setFailedFileIds] = useState<Set<string>>(() => new Set());
+  const [themePreference, setThemePreference] = useState<ThemePreference>(loadThemePreference);
+  const [systemTheme, setSystemTheme] = useState<ResolvedTheme>(getSystemTheme);
+  const refreshIdRef = useRef("");
+  const loadingFileIdsRef = useRef<Set<string>>(new Set());
+  const failedFileIdsRef = useRef<Set<string>>(new Set());
+  const resolvedTheme = themePreference === "system" ? systemTheme : themePreference;
+  const ThemeIcon = themePreference === "system" ? Monitor : themePreference === "light" ? Sun : Moon;
 
   useEffect(() => {
     void refreshPullRequests(settings);
@@ -272,6 +382,18 @@ export function App() {
   useEffect(() => {
     localStorage.setItem("reviewDesk.accounts", JSON.stringify(settings));
   }, [settings]);
+
+  useEffect(() => {
+    localStorage.setItem("reviewDesk.theme", themePreference);
+  }, [themePreference]);
+
+  useEffect(() => {
+    const query = window.matchMedia("(prefers-color-scheme: light)");
+    const updateTheme = () => setSystemTheme(query.matches ? "light" : "dark");
+    updateTheme();
+    query.addEventListener("change", updateTheme);
+    return () => query.removeEventListener("change", updateTheme);
+  }, []);
 
   useEffect(() => {
     if (toasts.length === 0) return;
@@ -285,20 +407,52 @@ export function App() {
     setToasts((items) => [...items.slice(-2), { id: crypto.randomUUID(), message, tone }]);
   }
 
-  async function refreshPullRequests(nextSettings = settings) {
+  async function refreshPullRequests(nextSettings = settings, scope = selectedScope) {
+    const refreshId = crypto.randomUUID();
+    refreshIdRef.current = refreshId;
+    setPullRequests([]);
+    setSelectedPrId("");
+    setSelectedFilePath("");
+    loadingFileIdsRef.current = new Set();
+    failedFileIdsRef.current = new Set();
+    setLoadingFileIds(new Set());
+    setFailedFileIds(new Set());
+    setProviderProgress(emptyProviderProgress());
     setIsLoading(true);
     try {
-      const result = await loadAllPullRequests(nextSettings);
+      const result = await loadAllPullRequests(nextSettings, scope, {
+        onPullRequests: (items) => {
+          if (refreshIdRef.current !== refreshId || items.length === 0) return;
+          setPullRequests((current) => mergePullRequests(current, items));
+          setSelectedPrId((current) => current || items[0]?.id || "");
+          setSelectedFilePath((current) => current || items[0]?.files[0]?.path || "");
+        },
+        onProgress: (progress: LoadProgress) => {
+          if (refreshIdRef.current !== refreshId) return;
+          setProviderProgress((current) => ({
+            ...current,
+            [progress.provider]: {
+              completed: progress.completed,
+              total: progress.total,
+            },
+          }));
+        },
+        onWarning: (message) => {
+          if (refreshIdRef.current !== refreshId) return;
+          showToast(message, "error");
+        },
+      });
+      if (refreshIdRef.current !== refreshId) return;
       if (result.updatedSettings) {
         setSettings(result.updatedSettings);
       }
-      setPullRequests(result.pullRequests);
+      setPullRequests((current) => mergePullRequests(current, result.pullRequests));
       result.errors.forEach((error) => showToast(error, "error"));
       setUsingDemo(result.usingDemo);
-      setSelectedPrId(result.pullRequests[0]?.id ?? "");
-      setSelectedFilePath(result.pullRequests[0]?.files[0]?.path ?? "");
+      setSelectedPrId((current) => current || result.pullRequests[0]?.id || "");
+      setSelectedFilePath((current) => current || result.pullRequests[0]?.files[0]?.path || "");
     } finally {
-      setIsLoading(false);
+      if (refreshIdRef.current === refreshId) setIsLoading(false);
     }
   }
 
@@ -349,8 +503,9 @@ export function App() {
       const next = { ...settings, githubToken: "", githubConnections };
       setSettings(next);
       showToast("GitHub connected.", "success");
-      await refreshPullRequests(next);
       setConnectView(null);
+      setConnectingProvider(null);
+      void refreshPullRequests(next);
     } catch (error) {
       showToast(error instanceof Error ? error.message : "GitHub OAuth failed.", "error");
     } finally {
@@ -405,8 +560,9 @@ export function App() {
       const next = { ...settings, bitbucketAccessToken: "", bitbucketConnections };
       setSettings(next);
       showToast("Bitbucket connected.", "success");
-      await refreshPullRequests(next);
       setConnectView(null);
+      setConnectingProvider(null);
+      void refreshPullRequests(next);
     } catch (error) {
       showToast(error instanceof Error ? error.message : "Bitbucket OAuth failed.", "error");
     } finally {
@@ -430,6 +586,11 @@ export function App() {
     setSettings(next);
     showToast(`${providerLabel[provider]} disconnected.`);
     await refreshPullRequests(next);
+  }
+
+  function closeConnectModal() {
+    if (connectingProvider) return;
+    setConnectView(null);
   }
 
   async function waitForOAuthCallback(
@@ -471,19 +632,211 @@ export function App() {
   const visiblePullRequests = useMemo(() => {
     return pullRequests.filter((pr) => {
       const providerMatch = selectedProvider === "all" || pr.provider === selectedProvider;
-      const scope = scopeFilters.find((item) => item.value === selectedScope);
-      const scopeMatch = !scope?.role || pr.viewerRoles?.includes(scope.role);
+      const scopeMatch = pr.viewerRoles?.includes(selectedScope);
       const textMatch = `${pr.title} ${pr.repo} ${pr.author}`.toLowerCase().includes(query.toLowerCase());
       return providerMatch && scopeMatch && textMatch;
     });
   }, [pullRequests, query, selectedProvider, selectedScope]);
+  const providerCounts = useMemo(() => {
+    return pullRequests.reduce(
+      (counts, pr) => {
+        if (pr.viewerRoles?.includes(selectedScope)) counts[pr.provider] += 1;
+        return counts;
+      },
+      { github: 0, bitbucket: 0 } satisfies Record<ProviderKind, number>,
+    );
+  }, [pullRequests, selectedScope]);
+  const totalProviderCount = providerCounts.github + providerCounts.bitbucket;
+  const scopeCounts = useMemo(() => {
+    return scopeFilters.reduce(
+      (counts, scope) => {
+        counts[scope.value] = pullRequests.filter((pr) => {
+          const providerMatch = selectedProvider === "all" || pr.provider === selectedProvider;
+          return providerMatch && Boolean(pr.viewerRoles?.includes(scope.value));
+        }).length;
+        return counts;
+      },
+      {} as Record<PullRequestScope, number>,
+    );
+  }, [pullRequests, selectedProvider]);
+  const connectedProviders = useMemo(
+    () => ({
+      github: settings.githubConnections.length > 0,
+      bitbucket: settings.bitbucketConnections.length > 0,
+    }),
+    [settings.bitbucketConnections.length, settings.githubConnections.length],
+  );
+  const loadingProviders = useMemo(
+    () =>
+      providers
+        .filter((provider) => connectedProviders[provider.kind] || providerProgress[provider.kind].total > 0)
+        .map((provider) => {
+          const progress = providerProgress[provider.kind];
+          return {
+            kind: provider.kind,
+            label: provider.label,
+            percent: loadPercent(progress),
+            completed: progress.completed,
+            total: progress.total,
+          };
+        }),
+    [connectedProviders, providerProgress],
+  );
 
   const selectedPr = visiblePullRequests.find((pr) => pr.id === selectedPrId) ?? visiblePullRequests[0];
   const selectedFile =
     selectedPr?.files.find((file) => file.path === selectedFilePath) ?? selectedPr?.files[0];
-  const selectedDescription = selectedPr?.description ? plainTextDescription(selectedPr.description) : "";
+  const selectedFilesLoading = Boolean(selectedPr && loadingFileIds.has(selectedPr.id));
+  const selectedDescription = selectedPr?.description?.trim() ?? "";
   const hasConnectedAccounts = settings.githubConnections.length > 0 || settings.bitbucketConnections.length > 0;
-  const isFiltered = selectedProvider !== "all" || selectedScope !== "all" || query.trim().length > 0;
+  const isFiltered = selectedProvider !== "all" || selectedScope !== "reviewer" || query.trim().length > 0;
+  const markdownComponents = useMemo<Components>(
+    () => ({
+      a({ href, children, className, ...props }) {
+        return (
+          <a
+            {...props}
+            className={cn(externalLinkClasses, className)}
+            href={href}
+            onClick={(event) => openExternal(event, href)}
+          >
+            {children}
+          </a>
+        );
+      },
+      blockquote({ children }) {
+        return (
+          <blockquote className="my-2 border-l-2 border-[var(--border-strong)] bg-[var(--surface-2)] px-3 py-1 text-[var(--text-muted)]">
+            {children}
+          </blockquote>
+        );
+      },
+      code({ children, className }) {
+        return (
+          <code
+            className={cn(
+              "rounded-[4px] bg-[var(--surface-3)] px-1.5 py-0.5 font-mono text-[13px] text-[var(--text)]",
+              className,
+            )}
+          >
+            {children}
+          </code>
+        );
+      },
+      del({ children }) {
+        return <del className="text-[var(--text-muted)]">{children}</del>;
+      },
+      em({ children }) {
+        return <em className="text-[var(--text-soft)]">{children}</em>;
+      },
+      h1({ children }) {
+        return <h2 className="mb-2 mt-3 text-[17px] font-bold text-[var(--text)]">{children}</h2>;
+      },
+      h2({ children }) {
+        return <h3 className="mb-2 mt-3 text-[16px] font-bold text-[var(--text)]">{children}</h3>;
+      },
+      h3({ children }) {
+        return <h4 className="mb-1.5 mt-2.5 text-[15px] font-bold text-[var(--text)]">{children}</h4>;
+      },
+      img({ alt, src }) {
+        return <img alt={alt ?? ""} className="my-2 max-w-full rounded-lg border border-[var(--border)]" src={src} />;
+      },
+      hr() {
+        return <hr className="my-3 border-[var(--border)]" />;
+      },
+      input({ checked, type }) {
+        return (
+          <input
+            checked={checked}
+            className="mr-2 align-middle accent-[var(--accent)]"
+            disabled
+            readOnly
+            type={type}
+          />
+        );
+      },
+      li({ children }) {
+        return <li className="my-1 pl-1 marker:text-[var(--text-muted)]">{children}</li>;
+      },
+      ol({ children }) {
+        return <ol className="my-2 ml-5 list-decimal text-[var(--text-soft)]">{children}</ol>;
+      },
+      p({ children }) {
+        return <p className="my-2 text-[var(--text-soft)]">{children}</p>;
+      },
+      pre({ children }) {
+        return (
+          <pre className="my-2 max-w-full overflow-x-auto rounded-lg border border-[var(--border)] bg-[var(--surface-3)] p-3 text-[13px] text-[var(--text)] [&_code]:bg-transparent [&_code]:p-0 [&_code]:text-[var(--text)]">
+            {children}
+          </pre>
+        );
+      },
+      strong({ children }) {
+        return <strong className="text-[var(--text)]">{children}</strong>;
+      },
+      table({ children }) {
+        return (
+          <table className="my-2 block max-w-full overflow-x-auto rounded-lg border border-[var(--border)] text-left text-[13px] text-[var(--text-soft)]">
+            {children}
+          </table>
+        );
+      },
+      td({ children }) {
+        return <td className="border-t border-[var(--border)] bg-[var(--surface)] px-2.5 py-1.5 text-[var(--text-soft)]">{children}</td>;
+      },
+      th({ children }) {
+        return <th className="border-b border-[var(--border)] bg-[var(--surface-2)] px-2.5 py-1.5 text-[var(--text)]">{children}</th>;
+      },
+      ul({ children }) {
+        return <ul className="my-2 ml-5 list-disc text-[var(--text-soft)]">{children}</ul>;
+      },
+    }),
+    [],
+  );
+
+  useEffect(() => {
+    if (!selectedPr || selectedPr.filesLoaded || selectedPr.isDemo) return;
+    if (loadingFileIdsRef.current.has(selectedPr.id) || failedFileIdsRef.current.has(selectedPr.id)) return;
+
+    let cancelled = false;
+    loadingFileIdsRef.current = new Set(loadingFileIdsRef.current).add(selectedPr.id);
+    setLoadingFileIds((items) => new Set(items).add(selectedPr.id));
+    void loadPullRequestFiles(settings, selectedPr)
+      .then((result) => {
+        if (cancelled) return;
+        if (result.updatedSettings) setSettings(result.updatedSettings);
+        setPullRequests((items) =>
+          items.map((item) => (item.id === result.pullRequest.id ? mergePullRequests([item], [result.pullRequest])[0] : item)),
+        );
+        setSelectedFilePath(result.pullRequest.files[0]?.path ?? "");
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        failedFileIdsRef.current = new Set(failedFileIdsRef.current).add(selectedPr.id);
+        setFailedFileIds((items) => new Set(items).add(selectedPr.id));
+        showToast(
+          error instanceof Error
+            ? `${providerLabel[selectedPr.provider]} changes: ${error.message}`
+            : `${providerLabel[selectedPr.provider]} changes failed.`,
+          "error",
+        );
+      })
+      .finally(() => {
+        if (cancelled) return;
+        const nextLoading = new Set(loadingFileIdsRef.current);
+        nextLoading.delete(selectedPr.id);
+        loadingFileIdsRef.current = nextLoading;
+        setLoadingFileIds((items) => {
+          const next = new Set(items);
+          next.delete(selectedPr.id);
+          return next;
+        });
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedPr, settings]);
 
   useEffect(() => {
     if (selectedPr && !selectedPr.files.some((file) => file.path === selectedFilePath)) {
@@ -538,18 +891,30 @@ export function App() {
   }
 
   return (
-    <div className="grid h-screen overflow-hidden grid-cols-[340px_minmax(0,1fr)] bg-[#101319] text-[#e7edf4] max-[1040px]:grid-cols-[300px_minmax(0,1fr)]">
-      <aside className="flex h-screen min-h-0 flex-col gap-[18px] overflow-hidden border-r border-[#26313d] bg-[#141a22] px-5 pb-[18px] pt-8">
+    <div
+      className="relative grid h-screen overflow-hidden grid-cols-[340px_minmax(0,1fr)] bg-[var(--bg)] text-[var(--text)] max-[1040px]:grid-cols-[300px_minmax(0,1fr)]"
+      style={themeVars(resolvedTheme)}
+    >
+      <div className="fixed left-0 right-0 top-0 z-10 h-8 [-webkit-app-region:drag]" aria-hidden="true" />
+      <aside className="flex h-screen min-h-0 flex-col gap-[18px] overflow-hidden border-r border-[var(--border)] bg-[var(--sidebar)] px-5 pb-[18px] pt-8">
         <div className="flex min-h-[54px] items-center gap-3 rounded-lg px-1">
-          <div className="grid size-11 shrink-0 place-items-center rounded-lg border border-[#3b4858] bg-[#1d2631] text-[#6ee7b7]">
+          <div className="grid size-11 shrink-0 place-items-center rounded-lg border border-[var(--border-strong)] bg-[var(--surface-2)] text-[var(--accent)]">
             <GitPullRequestArrow size={20} />
           </div>
           <div className="min-w-0 flex-1">
             <strong className="block truncate text-[17px] leading-5 tracking-normal">Chchchchanges</strong>
-            <span className="mt-1 block truncate text-[13px] leading-4 text-[#91a0af]">Pull request review</span>
+            <span className="mt-1 block truncate text-[13px] leading-4 text-[var(--text-muted)]">Pull request review</span>
           </div>
           <button
-            className="ml-2 grid size-9 shrink-0 cursor-pointer place-items-center rounded-lg border border-[#334253] bg-[#151d26] text-[#c8d3df]"
+            className="ml-2 grid size-9 shrink-0 cursor-pointer place-items-center rounded-lg border border-[var(--border-strong)] bg-[var(--surface-2)] text-[var(--text-soft)]"
+            onClick={() => setThemePreference((current) => nextThemePreference(current))}
+            aria-label={`Theme: ${themePreference}`}
+            title={`Theme: ${themePreference}`}
+          >
+            <ThemeIcon size={17} />
+          </button>
+          <button
+            className="grid size-9 shrink-0 cursor-pointer place-items-center rounded-lg border border-[var(--border-strong)] bg-[var(--surface-2)] text-[var(--text-soft)]"
             onClick={() => {
               setSettingsPage("general");
               setSettingsOpen(true);
@@ -560,51 +925,45 @@ export function App() {
           </button>
         </div>
 
-        <div className="flex h-[42px] items-center gap-2.5 rounded-lg border border-[#2d3947] bg-[#0f141b] px-3 text-[#91a0af]">
+        <div className="flex h-[42px] items-center gap-2.5 rounded-lg border border-[var(--border)] bg-[var(--surface-3)] px-3 text-[var(--text-muted)]">
           <Search size={16} />
           <input
-            className="w-full border-0 bg-transparent text-[#e7edf4] outline-none"
+            className="w-full border-0 bg-transparent text-[var(--text)] outline-none placeholder:text-[var(--text-muted)]"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             placeholder="Search PRs"
           />
         </div>
 
-        <div className="grid grid-cols-3 gap-1.5 rounded-lg bg-[#0f141b] p-[5px]" aria-label="Provider filter">
+        <div className="grid grid-cols-3 gap-1.5 rounded-lg bg-[var(--surface-3)] p-[5px]" aria-label="Provider filter">
           <button
-            className={cn(
-              "min-h-8 cursor-pointer rounded-md border-0 bg-transparent px-2.5 text-[12px] text-[#91a0af]",
-              selectedProvider === "all" && "bg-[#253241] text-[#f7fafc]",
-            )}
+            className={filterButtonClasses(selectedProvider === "all")}
             onClick={() => setSelectedProvider("all")}
           >
-            All
+            All <span className="text-[var(--text-muted)]">{totalProviderCount}</span>
           </button>
           {providers.map((provider) => (
             <button
               key={provider.kind}
-              className={cn(
-                "min-h-8 cursor-pointer rounded-md border-0 bg-transparent px-2.5 text-[12px] text-[#91a0af]",
-                selectedProvider === provider.kind && "bg-[#253241] text-[#f7fafc]",
-              )}
+              className={filterButtonClasses(selectedProvider === provider.kind)}
               onClick={() => setSelectedProvider(provider.kind)}
             >
-              {provider.label}
+              {provider.label} <span className="text-[var(--text-muted)]">{providerCounts[provider.kind]}</span>
             </button>
           ))}
         </div>
 
-        <div className="flex flex-wrap gap-1.5 rounded-lg bg-[#0f141b] p-[5px]" aria-label="Pull request scope filter">
+        <div className="flex flex-wrap gap-1.5 rounded-lg bg-[var(--surface-3)] p-[5px]" aria-label="Pull request scope filter">
           {scopeFilters.map((scope) => (
             <button
               key={scope.value}
-              className={cn(
-                "min-h-8 cursor-pointer rounded-md border-0 bg-transparent px-2.5 text-[12px] text-[#91a0af]",
-                selectedScope === scope.value && "bg-[#253241] text-[#f7fafc]",
-              )}
-              onClick={() => setSelectedScope(scope.value)}
+              className={filterButtonClasses(selectedScope === scope.value)}
+              onClick={() => {
+                setSelectedScope(scope.value);
+                void refreshPullRequests(settings, scope.value);
+              }}
             >
-              {scope.label}
+              {scope.label} <span className="text-[var(--text-muted)]">{scopeCounts[scope.value] ?? 0}</span>
             </button>
           ))}
         </div>
@@ -614,8 +973,8 @@ export function App() {
             <button
               key={pr.id}
               className={cn(
-                "flex w-full cursor-pointer flex-col gap-2 rounded-lg border border-[#26313d] bg-[#111820] p-3.5 text-left text-[#dbe6f0]",
-                selectedPr?.id === pr.id && "border-[#6ee7b7] bg-[#17212b]",
+                "flex w-full cursor-pointer flex-col gap-2 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-3.5 text-left text-[var(--text-card)]",
+                selectedPr?.id === pr.id && "border-[var(--accent)] bg-[var(--surface-4)]",
               )}
               onClick={() => selectPullRequest(pr)}
             >
@@ -623,7 +982,7 @@ export function App() {
                 {providerLabel[pr.provider]}
               </span>
               {pr.isDemo && (
-                <span className="w-fit rounded-full border border-[#665a34] px-[7px] py-0.5 text-[11px] font-bold text-[#f5d987]">
+                <span className="w-fit rounded-full border border-[var(--warning-border)] px-[7px] py-0.5 text-[11px] font-bold text-[var(--warning)]">
                   Demo
                 </span>
               )}
@@ -631,7 +990,7 @@ export function App() {
                 <span className="flex flex-wrap gap-1">
                   {pr.viewerRoles.map((role) => (
                     <span
-                      className="w-fit rounded-full border border-[#334253] px-[7px] py-0.5 text-[11px] font-bold text-[#aebdcb]"
+                      className="w-fit rounded-full border border-[var(--border-strong)] px-[7px] py-0.5 text-[11px] font-bold text-[var(--text-soft)]"
                       key={`${pr.id}-${role}`}
                     >
                       {roleLabels[role]}
@@ -640,29 +999,61 @@ export function App() {
                 </span>
               )}
               <strong>{pr.title}</strong>
-              <span className="text-[13px] text-[#91a0af]">
+              <span className="text-[13px] text-[var(--text-muted)]">
                 {pr.repo} #{pr.number}
               </span>
-              <span className="flex items-center justify-between gap-2.5 text-xs text-[#91a0af]">
+              <span className="flex items-center justify-between gap-2.5 text-xs text-[var(--text-muted)]">
                 <span>{pr.author}</span>
                 <span>{pr.updatedAt}</span>
               </span>
-              <span className="flex items-center justify-start gap-2.5 text-xs text-[#91a0af]">
-                <span className="text-[#7ddf9f]">+{pr.additions}</span>
-                <span className="text-[#ff9b9b]">-{pr.deletions}</span>
+              <span className="flex items-center justify-start gap-2.5 text-xs text-[var(--text-muted)]">
+                <span className="text-[var(--success)]">+{pr.additions}</span>
+                <span className="text-[var(--danger)]">-{pr.deletions}</span>
                 <span>{pr.comments} comments</span>
               </span>
             </button>
           ))}
         </div>
+
+        {isLoading && loadingProviders.length > 0 && (
+          <div className="shrink-0 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-3 text-[12px] text-[var(--text-muted)]">
+            <div className="mb-2 flex items-center gap-2 font-bold text-[var(--text-soft)]">
+              <Loader2 className="animate-spin text-[var(--link)]" size={14} />
+              Loading pull requests
+            </div>
+            <div className="flex flex-col gap-2">
+              {loadingProviders.map((provider) => (
+                <div className="grid gap-1.5" key={provider.kind}>
+                  <div className="flex items-center justify-between gap-3">
+                    <span>{provider.label}</span>
+                    <span className="font-mono text-[var(--text-soft)]">
+                      {provider.percent}%
+                    </span>
+                  </div>
+                  <div className="h-1.5 overflow-hidden rounded-full bg-[var(--surface-3)]">
+                    <div
+                      className="h-full rounded-full bg-[var(--accent)] transition-[width]"
+                      style={{ width: `${provider.percent}%` }}
+                    />
+                  </div>
+                  {provider.total > 0 && (
+                    <span className="font-mono text-[11px]">
+                      {provider.completed}/{provider.total} requests
+                    </span>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </aside>
 
-      <main className="h-screen min-w-0 overflow-auto p-[26px]">
+      <main className="flex h-screen min-w-0 flex-col overflow-hidden p-[26px]">
         {selectedPr && selectedFile ? (
           <>
-            <header className="mb-5 flex items-start justify-between gap-6">
+            <header className="mb-5 flex max-h-[34vh] shrink-0 items-start justify-between gap-6 overflow-auto pr-1">
               <div>
-                <div className="flex items-center gap-1.5 text-[13px] text-[#91a0af]">
+                <div className="flex items-center gap-1.5 text-[13px] text-[var(--text-muted)]">
                   <span>{providerLabel[selectedPr.provider]}</span>
                   <ChevronDown size={14} />
                   <span>{selectedPr.repo}</span>
@@ -676,7 +1067,7 @@ export function App() {
                     {selectedPr.title}
                   </a>
                 </h1>
-                <p className="m-0 text-[#9eacba]">
+                <p className="m-0 text-[var(--text-muted)]">
                   <a
                     className={externalLinkClasses}
                     href={selectedPr.url}
@@ -702,9 +1093,11 @@ export function App() {
                   </a>
                 </p>
                 {selectedDescription && (
-                  <p className="mt-3 max-w-[920px] whitespace-pre-line text-[14px] leading-6 text-[#b5c1cd]">
-                    {selectedDescription}
-                  </p>
+                  <div className="mt-3 max-w-[920px] text-[14px] leading-6 text-[var(--text-soft)]">
+                    <ReactMarkdown components={markdownComponents} remarkPlugins={[remarkGfm]}>
+                      {selectedDescription}
+                    </ReactMarkdown>
+                  </div>
                 )}
               </div>
               <div className="flex gap-2.5">
@@ -712,21 +1105,21 @@ export function App() {
                   <PanelLeft size={16} />
                   Files {selectedPr.files.length}
                 </button>
-                <button className={controls.primary}>
+                <button className={controls.success}>
                   <CheckCircle2 size={16} />
                   Approve
                 </button>
               </div>
             </header>
 
-            <section className="grid min-h-[calc(100vh-154px)] grid-cols-[280px_minmax(0,1fr)] overflow-hidden rounded-lg border border-[#26313d] bg-[#0e141b] max-[1040px]:grid-cols-[220px_minmax(0,1fr)]">
-              <nav className="flex flex-col gap-1 border-r border-[#26313d] bg-[#121923] p-3" aria-label="Changed files">
+            <section className="grid min-h-0 flex-1 grid-cols-[280px_minmax(0,1fr)] overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--panel)] max-[1040px]:grid-cols-[220px_minmax(0,1fr)]">
+              <nav className="flex min-h-0 flex-col gap-1 overflow-auto border-r border-[var(--border)] bg-[var(--surface)] p-3" aria-label="Changed files">
                 {selectedPr.files.map((file) => (
                   <button
                     key={file.path}
                     className={cn(
-                      "grid cursor-pointer grid-cols-[18px_minmax(0,1fr)] gap-2 rounded-[7px] border border-transparent bg-transparent p-2.5 text-left text-[#cbd7e3]",
-                      selectedFile.path === file.path && "border-[#3d4f63] bg-[#1a2430]",
+                      "grid cursor-pointer grid-cols-[18px_minmax(0,1fr)] gap-2 rounded-[7px] border border-transparent bg-transparent p-2.5 text-left text-[var(--text-soft)]",
+                      selectedFile.path === file.path && "border-[var(--border-active)] bg-[var(--surface-4)]",
                     )}
                     onClick={() => setSelectedFilePath(file.path)}
                   >
@@ -734,7 +1127,7 @@ export function App() {
                     <span className="break-words">{file.path}</span>
                     <span className="col-start-2 flex gap-2 text-xs">
                       <b>+{file.additions}</b>
-                      <i className="not-italic text-[#ff9b9b]">-{file.deletions}</i>
+                      <i className="not-italic text-[var(--danger)]">-{file.deletions}</i>
                     </span>
                   </button>
                 ))}
@@ -744,6 +1137,7 @@ export function App() {
                 file={selectedFile}
                 pr={selectedPr}
                 comments={comments}
+                loading={selectedFilesLoading}
                 activeLineKey={activeLineKey}
                 draft={draft}
                 onActivateLine={setActiveLineKey}
@@ -753,9 +1147,9 @@ export function App() {
             </section>
           </>
         ) : (
-          <div className="grid min-h-[60vh] place-items-center text-center text-[#91a0af]">
+          <div className="grid min-h-[60vh] place-items-center text-center text-[var(--text-muted)]">
             <div className="flex max-w-[360px] flex-col items-center gap-3">
-              <h2 className="m-0 text-[22px] tracking-normal text-[#e7edf4]">
+              <h2 className="m-0 text-[22px] tracking-normal text-[var(--text)]">
                 {hasConnectedAccounts ? "No pull requests found" : "No accounts connected"}
               </h2>
               <p className="m-0">
@@ -768,8 +1162,9 @@ export function App() {
                   className={controls.primary}
                   onClick={() => {
                     setSelectedProvider("all");
-                    setSelectedScope("all");
+                    setSelectedScope("reviewer");
                     setQuery("");
+                    void refreshPullRequests(settings, "reviewer");
                   }}
                 >
                   Clear filters
@@ -792,23 +1187,23 @@ export function App() {
 
       {settingsOpen && (
         <div
-          className="fixed inset-0 z-20 grid place-items-center bg-[#05080c]/60 p-6"
+          className="fixed inset-0 z-20 grid place-items-center bg-[var(--overlay)] p-6"
           role="presentation"
           onMouseDown={() => setSettingsOpen(false)}
         >
           <section
-            className="w-[min(640px,calc(100vw-32px))] rounded-lg border border-[#334253] bg-[#121923] text-[#e7edf4] shadow-2xl"
+            className="w-[min(640px,calc(100vw-32px))] rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] text-[var(--text)] shadow-2xl"
             role="dialog"
             aria-modal="true"
             aria-labelledby="settings-title"
             onMouseDown={(event) => event.stopPropagation()}
           >
-            <header className="flex items-start justify-between gap-4 border-b border-[#253241] p-4">
+            <header className="flex items-start justify-between gap-4 border-b border-[var(--border)] p-4">
               <div>
                 <h2 className="m-0 text-lg tracking-normal" id="settings-title">
                   Settings
                 </h2>
-                <p className="m-0 text-[13px] text-[#91a0af]">
+                <p className="m-0 text-[13px] text-[var(--text-muted)]">
                   {settingsPage === "general" ? "General app preferences." : "Accounts used to load pull requests."}
                 </p>
               </div>
@@ -818,11 +1213,11 @@ export function App() {
             </header>
 
             <div className="grid min-h-[300px] grid-cols-[160px_minmax(0,1fr)]">
-              <nav className="flex flex-col gap-1.5 border-r border-[#253241] p-3.5" aria-label="Settings pages">
+              <nav className="flex flex-col gap-1.5 border-r border-[var(--border)] p-3.5" aria-label="Settings pages">
                 <button
                   className={cn(
-                    "h-9 cursor-pointer rounded-lg border border-transparent bg-transparent px-2.5 text-left text-[#91a0af]",
-                    settingsPage === "general" && "border-[#3d4f63] bg-[#1a2430] text-[#e7edf4]",
+                    "h-9 cursor-pointer rounded-lg border border-transparent bg-transparent px-2.5 text-left text-[var(--text-muted)]",
+                    settingsPage === "general" && "border-[var(--border-active)] bg-[var(--surface-4)] text-[var(--text)]",
                   )}
                   onClick={() => setSettingsPage("general")}
                 >
@@ -830,8 +1225,8 @@ export function App() {
                 </button>
                 <button
                   className={cn(
-                    "h-9 cursor-pointer rounded-lg border border-transparent bg-transparent px-2.5 text-left text-[#91a0af]",
-                    settingsPage === "connections" && "border-[#3d4f63] bg-[#1a2430] text-[#e7edf4]",
+                    "h-9 cursor-pointer rounded-lg border border-transparent bg-transparent px-2.5 text-left text-[var(--text-muted)]",
+                    settingsPage === "connections" && "border-[var(--border-active)] bg-[var(--surface-4)] text-[var(--text)]",
                   )}
                   onClick={() => setSettingsPage("connections")}
                 >
@@ -840,24 +1235,24 @@ export function App() {
               </nav>
 
               <div className="flex min-w-0 flex-col gap-3 p-3.5">
-                {settingsPage === "general" && <p className="m-0 text-[#91a0af]">No general settings yet.</p>}
+                {settingsPage === "general" && <p className="m-0 text-[var(--text-muted)]">No general settings yet.</p>}
                 {settingsPage === "connections" && (
                   <>
                     <div className="flex flex-col gap-2">
                       {settings.githubConnections.length === 0 && settings.bitbucketConnections.length === 0 && (
-                        <p className="m-0 text-[13px] text-[#91a0af]">No accounts connected.</p>
+                        <p className="m-0 text-[13px] text-[var(--text-muted)]">No accounts connected.</p>
                       )}
                       {settings.githubConnections.map((connection) => (
                         <div
-                          className="flex min-h-[34px] items-center justify-between gap-3 rounded-lg border border-[#253241] bg-[#151d26] px-[9px] py-[7px] text-[13px]"
+                          className="flex min-h-[34px] items-center justify-between gap-3 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-[9px] py-[7px] text-[13px]"
                           key={`github-${connection.login}`}
                         >
                           <span className="inline-flex min-w-0 items-center gap-2 break-words">
-                            <CheckSquare2 className="text-[#7ddf9f]" size={16} />
+                            <CheckSquare2 className="text-[var(--success)]" size={16} />
                             GitHub: {connection.login}
                           </span>
                           <button
-                            className={cn(controls.link, "text-[#ffb4b4]")}
+                            className={cn(controls.link, "text-[var(--danger)]")}
                             onClick={() => void disconnectProvider("github", connection.login)}
                           >
                             Disconnect
@@ -866,15 +1261,15 @@ export function App() {
                       ))}
                       {settings.bitbucketConnections.map((connection) => (
                         <div
-                          className="flex min-h-[34px] items-center justify-between gap-3 rounded-lg border border-[#253241] bg-[#151d26] px-[9px] py-[7px] text-[13px]"
+                          className="flex min-h-[34px] items-center justify-between gap-3 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-[9px] py-[7px] text-[13px]"
                           key={`bitbucket-${connection.workspace}`}
                         >
                           <span className="inline-flex min-w-0 items-center gap-2 break-words">
-                            <CheckSquare2 className="text-[#7ddf9f]" size={16} />
+                            <CheckSquare2 className="text-[var(--success)]" size={16} />
                             Bitbucket: {connection.workspace}
                           </span>
                           <button
-                            className={cn(controls.link, "text-[#ffb4b4]")}
+                            className={cn(controls.link, "text-[var(--danger)]")}
                             onClick={() => void disconnectProvider("bitbucket", connection.workspace)}
                           >
                             Disconnect
@@ -882,19 +1277,19 @@ export function App() {
                         </div>
                       ))}
                     </div>
-                    <div className="flex flex-col gap-2 border-t border-[#253241] pt-2.5">
+                    <div className="flex flex-col gap-2 border-t border-[var(--border)] pt-2.5">
                       <button
-                        className="flex min-h-[38px] cursor-pointer items-center gap-2.5 rounded-lg border border-[#334253] bg-[#151d26] px-[11px] text-left text-[#e7edf4]"
+                        className="flex min-h-[38px] cursor-pointer items-center gap-2.5 rounded-lg border border-[var(--border-strong)] bg-[var(--surface-2)] px-[11px] text-left text-[var(--text)]"
                         onClick={() => {
                           setSettingsOpen(false);
                           setConnectView("github");
                         }}
                       >
-                        <BrandIcon icon={siGithub} className="size-4 text-[#e7edf4]" />
+                        <BrandIcon icon={siGithub} className="size-4 text-[var(--text)]" />
                         Connect GitHub
                       </button>
                       <button
-                        className="flex min-h-[38px] cursor-pointer items-center gap-2.5 rounded-lg border border-[#334253] bg-[#151d26] px-[11px] text-left text-[#e7edf4]"
+                        className="flex min-h-[38px] cursor-pointer items-center gap-2.5 rounded-lg border border-[var(--border-strong)] bg-[var(--surface-2)] px-[11px] text-left text-[var(--text)]"
                         onClick={() => {
                           setSettingsOpen(false);
                           setConnectView("bitbucket");
@@ -914,15 +1309,13 @@ export function App() {
 
       {connectView && (
         <div
-          className="fixed inset-0 z-20 grid place-items-center bg-[#05080c]/60 p-6"
+          className="fixed inset-0 z-20 grid place-items-center bg-[var(--overlay)] p-6"
           role="presentation"
-          onMouseDown={() => {
-            if (!connectingProvider) setConnectView(null);
-          }}
+          onMouseDown={closeConnectModal}
         >
           <section
             className={cn(
-              "relative w-[min(460px,calc(100vw-32px))] rounded-lg border border-[#334253] bg-[#121923] text-[#e7edf4] shadow-2xl",
+              "relative w-[min(460px,calc(100vw-32px))] rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] text-[var(--text)] shadow-2xl",
               connectingProvider && "pointer-events-none",
             )}
             role="dialog"
@@ -931,20 +1324,20 @@ export function App() {
             aria-labelledby="connect-title"
             onMouseDown={(event) => event.stopPropagation()}
           >
-            <header className="flex items-start justify-between gap-4 border-b border-[#253241] p-4">
+            <header className="flex items-start justify-between gap-4 border-b border-[var(--border)] p-4">
               <div>
                 <h2 className="m-0 text-lg tracking-normal" id="connect-title">
                   {connectView === "github" && "Connect GitHub"}
                   {connectView === "bitbucket" && "Connect Bitbucket"}
                 </h2>
-                <p className="m-0 text-[13px] text-[#91a0af]">
+                <p className="m-0 text-[13px] text-[var(--text-muted)]">
                   {connectView === "github" && "Authorize a GitHub account in your browser."}
                   {connectView === "bitbucket" && "Choose a workspace, then authorize Bitbucket."}
                 </p>
               </div>
               <button
                 className={controls.icon}
-                onClick={() => setConnectView(null)}
+                onClick={closeConnectModal}
                 disabled={Boolean(connectingProvider)}
                 aria-label="Close"
               >
@@ -954,10 +1347,10 @@ export function App() {
 
             <div className="flex flex-col gap-2.5 px-4 pb-4 pt-3.5">
               {connectView === "bitbucket" && (
-                <label className="mt-1 flex flex-col gap-[5px] text-[13px] text-[#91a0af]">
+                <label className="mt-1 flex flex-col gap-[5px] text-[13px] text-[var(--text-muted)]">
                   Bitbucket workspace
                   <input
-                    className="h-[38px] min-w-0 rounded-[7px] border border-[#334253] bg-[#0d1218] px-2.5 text-[#e7edf4] outline-none disabled:cursor-not-allowed disabled:opacity-55"
+                    className="h-[38px] min-w-0 rounded-[7px] border border-[var(--border-strong)] bg-[var(--surface-3)] px-2.5 text-[var(--text)] outline-none disabled:cursor-not-allowed disabled:opacity-55"
                     value={settings.bitbucketWorkspaces}
                     onChange={(event) => updateSettings({ bitbucketWorkspaces: event.target.value })}
                     placeholder="workspace-slug"
@@ -968,8 +1361,8 @@ export function App() {
               )}
             </div>
 
-            <footer className="flex items-center justify-between gap-4 border-t border-[#253241] p-4">
-              <button className={controls.ghost} onClick={() => setConnectView(null)} disabled={Boolean(connectingProvider)}>
+            <footer className="flex items-center justify-between gap-4 border-t border-[var(--border)] p-4">
+              <button className={controls.ghost} onClick={closeConnectModal} disabled={Boolean(connectingProvider)}>
                 Cancel
               </button>
               {connectView === "github" && (
@@ -999,9 +1392,9 @@ export function App() {
             </footer>
 
             {connectingProvider && (
-              <div className="absolute inset-0 grid place-items-center rounded-lg bg-[#121923]/72 backdrop-blur-[1px]">
-                <div className="inline-flex items-center gap-2.5 rounded-lg border border-[#334253] bg-[#151d26] px-3.5 py-2.5 text-sm font-bold text-[#e7edf4] shadow-2xl">
-                  <Loader2 className="animate-spin text-[#7dd3fc]" size={17} />
+              <div className="absolute inset-0 grid place-items-center rounded-lg bg-[var(--overlay)] backdrop-blur-[1px]">
+                <div className="inline-flex items-center gap-2.5 rounded-lg border border-[var(--border-strong)] bg-[var(--surface-2)] px-3.5 py-2.5 text-sm font-bold text-[var(--text)] shadow-2xl">
+                  <Loader2 className="animate-spin text-[var(--link)]" size={17} />
                   Connecting {providerLabel[connectingProvider]}
                 </div>
               </div>
@@ -1014,10 +1407,10 @@ export function App() {
         {toasts.map((toast) => (
           <div
             className={cn(
-              "flex items-start gap-3 rounded-lg border bg-[#121923] px-3.5 py-3 text-sm text-[#e7edf4] shadow-2xl",
+              "flex items-start gap-3 rounded-lg border bg-[var(--surface)] px-3.5 py-3 text-sm text-[var(--text)] shadow-2xl",
               toast.tone === "error" && "border-[#7f3333]",
               toast.tone === "success" && "border-[#2f7a55]",
-              toast.tone === "info" && "border-[#334253]",
+              toast.tone === "info" && "border-[var(--border-strong)]",
             )}
             key={toast.id}
             role={toast.tone === "error" ? "alert" : "status"}
@@ -1032,7 +1425,7 @@ export function App() {
             />
             <p className="m-0 min-w-0 flex-1 leading-[1.35]">{toast.message}</p>
             <button
-              className="grid size-6 shrink-0 cursor-pointer place-items-center rounded-md border-0 bg-transparent text-[#91a0af]"
+              className="grid size-6 shrink-0 cursor-pointer place-items-center rounded-md border-0 bg-transparent text-[var(--text-muted)]"
               onClick={() => setToasts((items) => items.filter((item) => item.id !== toast.id))}
               aria-label="Dismiss notification"
             >
@@ -1049,6 +1442,7 @@ type DiffViewerProps = {
   file: ReviewFile;
   pr: PullRequestSummary;
   comments: ReviewComment[];
+  loading?: boolean;
   activeLineKey: string | null;
   draft: string;
   onActivateLine(lineKey: string | null): void;
@@ -1060,6 +1454,7 @@ function DiffViewer({
   file,
   pr,
   comments,
+  loading,
   activeLineKey,
   draft,
   onActivateLine,
@@ -1070,26 +1465,32 @@ function DiffViewer({
   const language = languageFromPath(file.path);
 
   return (
-    <div className="min-w-0 overflow-hidden">
-      <div className="flex min-h-[54px] items-center justify-between border-b border-[#26313d] bg-[#141c25] px-4">
+    <div className="flex min-h-0 min-w-0 flex-col overflow-hidden">
+      <div className="flex min-h-[54px] items-center justify-between border-b border-[var(--border)] bg-[var(--panel-header)] px-4">
         <div className="flex items-center gap-2.5">
           <strong>{file.path}</strong>
-          <span className="text-[13px] text-[#91a0af]">{file.status}</span>
+          <span className="text-[13px] text-[var(--text-muted)]">{file.status}</span>
         </div>
         <div className="flex items-center gap-2.5 text-[13px]">
-          <span className="text-[#7ddf9f]">+{file.additions}</span>
-          <span className="text-[#ff9b9b]">-{file.deletions}</span>
+          <span className="text-[var(--success)]">+{file.additions}</span>
+          <span className="text-[var(--danger)]">-{file.deletions}</span>
         </div>
       </div>
 
       <div
-        className="max-h-[calc(100vh-208px)] overflow-auto font-mono text-[13px] leading-[1.55]"
+        className="min-h-0 flex-1 overflow-auto font-mono text-[13px] leading-[1.55]"
         role="table"
         aria-label={`${file.path} unified diff`}
       >
+        {loading && (
+          <div className="flex items-center gap-2 border-b border-[var(--border)] px-3.5 py-3 text-[var(--text-muted)]">
+            <Loader2 className="animate-spin text-[var(--link)]" size={15} />
+            Loading file changes
+          </div>
+        )}
         {hunks.map((hunk) => (
           <div key={hunk.header}>
-            <div className="sticky top-0 z-[2] border-b border-[#24303c] bg-[#1b2734] px-3.5 py-[7px] text-[#8fb9ff]">
+            <div className="sticky top-0 z-[2] border-b border-[var(--border)] bg-[var(--diff-header)] px-3.5 py-[7px] text-[var(--link)]">
               {hunk.header}
             </div>
             {hunk.lines.map((line) => {
@@ -1101,18 +1502,18 @@ function DiffViewer({
                 <div key={line.key}>
                   <div
                     className={cn(
-                      "group grid min-h-[25px] grid-cols-[58px_58px_34px_minmax(720px,1fr)] border-b border-[#26313d]/60 max-[1040px]:grid-cols-[46px_46px_32px_minmax(620px,1fr)]",
+                      "group grid min-h-[25px] grid-cols-[58px_58px_34px_minmax(720px,1fr)] border-b border-[var(--border)] max-[1040px]:grid-cols-[46px_46px_32px_minmax(620px,1fr)]",
                       diffRowClasses[line.kind],
                     )}
                   >
-                    <span className="select-none border-r border-[#26313d]/75 px-2.5 py-0.5 text-right text-[#6d7d8d]">
+                    <span className="select-none border-r border-[var(--border)] px-2.5 py-0.5 text-right text-[var(--text-muted)]">
                       {line.oldLine ?? ""}
                     </span>
-                    <span className="select-none border-r border-[#26313d]/75 px-2.5 py-0.5 text-right text-[#6d7d8d]">
+                    <span className="select-none border-r border-[var(--border)] px-2.5 py-0.5 text-right text-[var(--text-muted)]">
                       {line.newLine ?? ""}
                     </span>
                     <button
-                      className="grid w-full cursor-pointer place-items-center border-0 border-r border-[#26313d]/75 bg-transparent text-transparent group-hover:text-[#9fb2c5] focus-visible:text-[#9fb2c5]"
+                      className="grid w-full cursor-pointer place-items-center border-0 border-r border-[var(--border)] bg-transparent text-transparent group-hover:text-[var(--text-muted)] focus-visible:text-[var(--text-muted)]"
                       title="Add inline comment"
                       onClick={() => onActivateLine(activeLineKey === lineKey ? null : lineKey)}
                     >
@@ -1128,25 +1529,25 @@ function DiffViewer({
 
                   {lineComments.map((comment) => (
                     <div
-                      className="mb-2.5 ml-[150px] mr-[18px] mt-2 flex gap-2.5 rounded-lg border border-[#334253] bg-[#151d26] p-3 text-[#dce6ef] max-[1040px]:ml-[124px]"
+                      className="mb-2.5 ml-[150px] mr-[18px] mt-2 flex gap-2.5 rounded-lg border border-[var(--border-strong)] bg-[var(--surface-2)] p-3 text-[var(--text-card)] max-[1040px]:ml-[124px]"
                       key={comment.id}
                     >
-                      <CircleDot className="mt-[3px] text-[#f2c96d]" size={14} />
+                      <CircleDot className="mt-[3px] text-[var(--warning)]" size={14} />
                       <div>
                         <strong>
                           {comment.author}
                           {comment.pending ? " (pending)" : ""}
                         </strong>
-                        <p className="my-1 text-[#c5d0dc]">{comment.body}</p>
-                        <span className="text-xs text-[#7d8b99]">{comment.createdAt}</span>
+                        <p className="my-1 text-[var(--text-soft)]">{comment.body}</p>
+                        <span className="text-xs text-[var(--text-muted)]">{comment.createdAt}</span>
                       </div>
                     </div>
                   ))}
 
                   {activeLineKey === lineKey && (
-                    <div className="mb-2.5 ml-[150px] mr-[18px] mt-2 rounded-lg border border-[#334253] bg-[#151d26] p-2.5 max-[1040px]:ml-[124px]">
+                    <div className="mb-2.5 ml-[150px] mr-[18px] mt-2 rounded-lg border border-[var(--border-strong)] bg-[var(--surface-2)] p-2.5 max-[1040px]:ml-[124px]">
                       <textarea
-                        className="block min-h-[86px] w-full resize-y rounded-[7px] border border-[#334253] bg-[#0d1218] p-2.5 text-[#e7edf4] outline-none"
+                        className="block min-h-[86px] w-full resize-y rounded-[7px] border border-[var(--border-strong)] bg-[var(--surface-3)] p-2.5 text-[var(--text)] outline-none"
                         value={draft}
                         onChange={(event) => onDraftChange(event.target.value)}
                         placeholder={`Comment on ${file.path}:${line.newLine ?? line.oldLine}`}

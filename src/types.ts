@@ -24,6 +24,8 @@ export type PullRequestSummary = {
   state: ReviewState;
   viewerRoles?: PullRequestViewerRole[];
   files: ReviewFile[];
+  filesLoaded?: boolean;
+  connectionId?: string;
   isDemo?: boolean;
 };
 
@@ -34,6 +36,7 @@ export type ReviewFile = {
   additions: number;
   deletions: number;
   diff: string;
+  diffUrl?: string;
 };
 
 export type ReviewComment = {
@@ -62,6 +65,7 @@ export type AccountSettings = {
     workspace: string;
     token: string;
     refreshToken?: string;
+    repositories?: string[];
   }>;
 };
 
