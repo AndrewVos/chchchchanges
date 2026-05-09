@@ -36,7 +36,7 @@ The app shows demo PRs until you connect accounts.
 
 ### GitHub
 
-GitHub uses the hosted broker too.
+GitHub OAuth uses the hosted broker for browser login.
 
 1. In GitHub OAuth App, use callback URL `https://YOUR_HOST/api/github/callback`.
 2. Set hosted environment variables:
