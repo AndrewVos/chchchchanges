@@ -324,6 +324,8 @@ type GitHubPull = {
   comments?: number;
   review_comments?: number;
   state?: "open" | "closed";
+  merged?: boolean;
+  merged_at?: string | null;
   draft?: boolean;
 };
 type GitHubRepository = {
@@ -371,6 +373,7 @@ type BitbucketComment = {
 type BitbucketPull = {
   id: number;
   title: string;
+  state?: string;
   author?: BitbucketUser;
   reviewers?: BitbucketUser[];
   participants?: Array<{ user?: BitbucketUser }>;
@@ -642,6 +645,14 @@ function sortPullRequestsByUpdated(pullRequests: PullRequestSummary[]) {
   );
 }
 
+function isOpenGitHubPull(pull: GitHubPull) {
+  return (!pull.state || pull.state === "open") && !pull.merged && !pull.merged_at;
+}
+
+function isOpenBitbucketPull(pull: BitbucketPull) {
+  return !pull.state || pull.state.toUpperCase() === "OPEN";
+}
+
 function mergePullRequestSummaries(pullRequests: PullRequestSummary[]) {
   const pullRequestsById = new Map<string, PullRequestSummary>();
   for (const pullRequest of pullRequests) {
@@ -882,6 +893,7 @@ async function loadGitHubQueryPullRequests(
       const baseUrl = `https://api.github.com/repos/${repoRef.owner}/${repoRef.repo}/pulls/${repoRef.number}`;
       const pull = await requestJson<GitHubPull>(baseUrl, { headers: context.headers });
       reportProgress(1, 0);
+      if (!isOpenGitHubPull(pull)) return null;
       return {
         id: `github-${repoRef.owner}-${repoRef.repo}-${repoRef.number}`,
         provider: "github" as const,
@@ -949,7 +961,7 @@ async function loadGitHubPullRequestFromRef(
   reportProgress(0, 1);
   const pull = await requestJson<GitHubPull>(baseUrl, { headers: context.headers });
   reportProgress(1, 0);
-  if (pull.state && pull.state !== "open") {
+  if (!isOpenGitHubPull(pull)) {
     return [];
   }
   const updatedAtIso = pull.updated_at ?? new Date().toISOString();
@@ -1244,11 +1256,15 @@ async function loadBitbucketAuthoredPullRequests(
     bitbucketPullRequestLimit,
     (items) =>
       options.onPullRequests?.(
-        items.map((pull) => toBitbucketPullRequestSummary(pull, user, connection.workspace, ["author"], ["author"])),
+        items
+          .filter(isOpenBitbucketPull)
+          .map((pull) => toBitbucketPullRequestSummary(pull, user, connection.workspace, ["author"], ["author"])),
       ),
     reportProgress,
   );
-  return pulls.map((pull) => toBitbucketPullRequestSummary(pull, user, connection.workspace, ["author"], ["author"]));
+  return pulls
+    .filter(isOpenBitbucketPull)
+    .map((pull) => toBitbucketPullRequestSummary(pull, user, connection.workspace, ["author"], ["author"]));
 }
 
 async function loadBitbucketReviewerRepositories(
@@ -1305,7 +1321,9 @@ async function loadBitbucketReviewerPullRequests(
         bitbucketReviewerPullRequestLimit,
         (items) =>
           options.onPullRequests?.(
-            items.map((pull) => toBitbucketPullRequestSummary(pull, user, connection.workspace, ["reviewer"], ["reviewer"])),
+            items
+              .filter(isOpenBitbucketPull)
+              .map((pull) => toBitbucketPullRequestSummary(pull, user, connection.workspace, ["reviewer"], ["reviewer"])),
           ),
         reportRepoProgress,
       );
@@ -1325,7 +1343,9 @@ async function loadBitbucketReviewerPullRequests(
   });
 
   const pulls = pullGroups.flat();
-  return pulls.map((pull) => toBitbucketPullRequestSummary(pull, user, connection.workspace, ["reviewer"], ["reviewer"]));
+  return pulls
+    .filter(isOpenBitbucketPull)
+    .map((pull) => toBitbucketPullRequestSummary(pull, user, connection.workspace, ["reviewer"], ["reviewer"]));
 }
 
 async function loadBitbucketWatchedPullRequests(
@@ -1359,7 +1379,9 @@ async function loadBitbucketWatchedPullRequests(
         bitbucketWatchedPullRequestLimit,
         (items) =>
           options.onPullRequests?.(
-            items.map((pull) => toBitbucketPullRequestSummary(pull, user, connection.workspace, [], ["watched"])),
+            items
+              .filter(isOpenBitbucketPull)
+              .map((pull) => toBitbucketPullRequestSummary(pull, user, connection.workspace, [], ["watched"])),
           ),
         reportRepoProgress,
       );
@@ -1380,6 +1402,7 @@ async function loadBitbucketWatchedPullRequests(
 
   return pullGroups
     .flat()
+    .filter(isOpenBitbucketPull)
     .map((pull) => toBitbucketPullRequestSummary(pull, user, connection.workspace, [], ["watched"]));
 }
 

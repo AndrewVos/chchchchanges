@@ -370,6 +370,8 @@ function stateLabel(state: PullRequestSummary["state"]) {
   if (state === "changes-requested") return "Changes requested";
   if (state === "approved") return "Approved";
   if (state === "commented") return "Commented";
+  if (state === "merged") return "Merged";
+  if (state === "closed") return "Closed";
   return "Waiting";
 }
 
@@ -685,16 +687,18 @@ export function App() {
 
   const visiblePullRequests = useMemo(() => {
     return pullRequests.filter((pr) => {
+      const openMatch = pr.state !== "merged" && pr.state !== "closed";
       const providerMatch = selectedProvider === "all" || pr.provider === selectedProvider;
       const snoozedUntil = inboxState.snoozedUntilByPrId[pr.id];
       const snoozed = snoozedUntil ? new Date(snoozedUntil).getTime() > now : false;
       const textMatch = `${pr.title} ${pr.repo} ${pr.author}`.toLowerCase().includes(query.toLowerCase());
-      return providerMatch && !snoozed && textMatch;
+      return openMatch && providerMatch && !snoozed && textMatch;
     });
   }, [inboxState.snoozedUntilByPrId, now, pullRequests, query, selectedProvider]);
   const providerCounts = useMemo(() => {
     return pullRequests.reduce(
       (counts, pr) => {
+        if (pr.state === "merged" || pr.state === "closed") return counts;
         const snoozedUntil = inboxState.snoozedUntilByPrId[pr.id];
         const snoozed = snoozedUntil ? new Date(snoozedUntil).getTime() > now : false;
         if (!snoozed) counts[pr.provider] += 1;
@@ -1104,10 +1108,10 @@ export function App() {
         )}
       </aside>
 
-      <main className="flex h-screen min-w-0 flex-col overflow-hidden p-[26px]">
+      <main className="h-screen min-w-0 overflow-hidden p-[26px]">
         {selectedPr ? (
-          <>
-            <header className="mb-5 flex max-h-[34vh] shrink-0 items-start justify-between gap-6 overflow-auto pr-1">
+          <div className="flex h-full min-w-0 flex-col overflow-auto pr-1">
+            <header className="mb-5 flex shrink-0 items-start justify-between gap-6">
               <div>
                 <div className="flex items-center gap-1.5 text-[13px] text-[var(--text-muted)]">
                   <span>{providerLabel[selectedPr.provider]}</span>
@@ -1182,9 +1186,9 @@ export function App() {
               </div>
             </header>
 
-            <section className="min-h-0 flex-1 overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--panel)]">
+            <section className="shrink-0 overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--panel)]">
               {!selectedPr.filesLoaded ? (
-                <div className="grid h-full min-h-0 min-w-0 place-items-center text-[var(--text-muted)]">
+                <div className="grid min-h-[420px] min-w-0 place-items-center text-[var(--text-muted)]">
                   <div className="flex items-center gap-2">
                     <Loader2 className="animate-spin text-[var(--link)]" size={17} />
                     Loading file changes
@@ -1204,7 +1208,7 @@ export function App() {
                 />
               )}
             </section>
-          </>
+          </div>
         ) : (
           <div className="grid min-h-[60vh] place-items-center text-center text-[var(--text-muted)]">
             <div className="flex max-w-[360px] flex-col items-center gap-3">
@@ -1534,7 +1538,7 @@ function DiffStack({
   onSubmit,
 }: DiffStackProps) {
   return (
-    <div className="flex h-full min-h-0 min-w-0 flex-col overflow-auto">
+    <div className="flex min-w-0 flex-col">
       {loading && (
         <div className="flex items-center gap-2 border-b border-[var(--border)] px-3.5 py-3 text-[var(--text-muted)]">
           <Loader2 className="animate-spin text-[var(--link)]" size={15} />

@@ -1,6 +1,6 @@
 export type ProviderKind = "github" | "bitbucket";
 
-export type ReviewState = "changes-requested" | "approved" | "commented" | "waiting";
+export type ReviewState = "changes-requested" | "approved" | "commented" | "waiting" | "closed" | "merged";
 
 export type PullRequestViewerRole = "author" | "reviewer" | "assignee" | "mentioned" | "participant";
 export type PullRequestInboxReason = "author" | "reviewer" | "mentioned" | "watched";
