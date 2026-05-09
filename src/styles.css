@@ -60,6 +60,18 @@ button:disabled {
   padding-left: 6px;
 }
 
+.brand-settings {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  margin-left: auto;
+  place-items: center;
+  border: 1px solid #334253;
+  border-radius: 8px;
+  background: #151d26;
+  color: #c8d3df;
+}
+
 .brand-mark {
   display: grid;
   width: 42px;
@@ -348,6 +360,53 @@ button:disabled {
   gap: 8px;
   border-top: 1px solid #253241;
   padding-top: 10px;
+}
+
+.settings-modal {
+  width: min(640px, calc(100vw - 32px));
+}
+
+.settings-body {
+  display: grid;
+  grid-template-columns: 160px minmax(0, 1fr);
+  min-height: 300px;
+}
+
+.settings-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border-right: 1px solid #253241;
+  padding: 14px;
+}
+
+.settings-nav button {
+  height: 36px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: #91a0af;
+  text-align: left;
+  padding: 0 10px;
+}
+
+.settings-nav button.active {
+  border-color: #3d4f63;
+  background: #1a2430;
+  color: #e7edf4;
+}
+
+.settings-panel {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+}
+
+.settings-empty {
+  margin: 0;
+  color: #91a0af;
 }
 
 .provider-action-button {

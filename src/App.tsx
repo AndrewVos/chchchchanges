@@ -19,6 +19,7 @@ import {
   PanelLeft,
   Search,
   Send,
+  Settings,
 } from "lucide-react";
 import { getCommentLineKey, languageFromPath, parseUnifiedDiff } from "./diff";
 import { loadAllPullRequests, providers } from "./providers";
@@ -166,7 +167,8 @@ export function App() {
   const [activeLineKey, setActiveLineKey] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [settings, setSettings] = useState<AccountSettings>(loadStoredSettings);
-  const [connectMenuOpen, setConnectMenuOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsPage, setSettingsPage] = useState<"general" | "connections">("general");
   const [connectView, setConnectView] = useState<"github" | "bitbucket" | null>(null);
   const [loadErrors, setLoadErrors] = useState<string[]>([]);
   const [usingDemo, setUsingDemo] = useState(false);
@@ -253,7 +255,7 @@ export function App() {
       if (!settings.bitbucketWorkspaces.trim()) {
         setOauthStatus("Bitbucket workspace is required before connecting.");
         setConnectView("bitbucket");
-        setConnectMenuOpen(false);
+        setSettingsOpen(false);
         return;
       }
       const clientId = oauthConfig.bitbucketClientId || settings.bitbucketClientId;
@@ -415,6 +417,16 @@ export function App() {
             <strong>Chchchchanges</strong>
             <span>Pull request review</span>
           </div>
+          <button
+            className="brand-settings"
+            onClick={() => {
+              setSettingsPage("general");
+              setSettingsOpen(true);
+            }}
+            aria-label="Settings"
+          >
+            <Settings size={17} />
+          </button>
         </div>
 
         <div className="search-box">
@@ -489,9 +501,6 @@ export function App() {
                 </p>
               </div>
               <div className="review-actions">
-                <button className="ghost" onClick={() => setConnectMenuOpen((value) => !value)}>
-                  Connect
-                </button>
                 <button className="ghost">
                   <PanelLeft size={16} />
                   Files {selectedPr.files.length}
@@ -538,72 +547,108 @@ export function App() {
             <div>
               <h2>No accounts connected</h2>
               <p>Connect GitHub or Bitbucket to review pull requests.</p>
-              <button className="approve" onClick={() => setConnectMenuOpen(true)}>
-                Connect
+              <button className="approve" onClick={() => { setSettingsPage("connections"); setSettingsOpen(true); }}>
+                Settings
               </button>
             </div>
           </div>
         )}
       </main>
 
-      {connectMenuOpen && (
-        <div className="dropdown-layer" role="presentation" onMouseDown={() => setConnectMenuOpen(false)}>
-          <section className="connect-dropdown" onMouseDown={(event) => event.stopPropagation()}>
-            <div className="dropdown-section">
-              <strong>Connected accounts</strong>
-              {settings.githubConnections.length === 0 && settings.bitbucketConnections.length === 0 && (
-                <p>No accounts connected.</p>
-              )}
-              {settings.githubConnections.map((connection) => (
-                <div className="connection-chip compact" key={`github-${connection.login}`}>
-                  <span>
-                    <CheckSquare2 className="connected-check" size={16} />
-                    GitHub: {connection.login}
-                  </span>
-                  <button
-                    className="link-button disconnect"
-                    onClick={() => void disconnectProvider("github", connection.login)}
-                  >
-                    Disconnect
-                  </button>
-                </div>
-              ))}
-              {settings.bitbucketConnections.map((connection) => (
-                <div className="connection-chip compact" key={`bitbucket-${connection.workspace}`}>
-                  <span>
-                    <CheckSquare2 className="connected-check" size={16} />
-                    Bitbucket: {connection.workspace}
-                  </span>
-                  <button
-                    className="link-button disconnect"
-                    onClick={() => void disconnectProvider("bitbucket", connection.workspace)}
-                  >
-                    Disconnect
-                  </button>
-                </div>
-              ))}
-            </div>
-            <div className="dropdown-actions">
-              <button
-                className="provider-action-button"
-                onClick={() => {
-                  setConnectMenuOpen(false);
-                  setConnectView("github");
-                }}
-              >
-                <GitBranch size={16} />
-                GitHub
+      {settingsOpen && (
+        <div className="modal-backdrop" role="presentation" onMouseDown={() => setSettingsOpen(false)}>
+          <section
+            className="connect-modal settings-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="settings-title"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <header>
+              <div>
+                <h2 id="settings-title">Settings</h2>
+                <p>{settingsPage === "general" ? "General app preferences." : "Accounts used to load pull requests."}</p>
+              </div>
+              <button className="icon-button" onClick={() => setSettingsOpen(false)} aria-label="Close">
+                <X size={18} />
               </button>
-              <button
-                className="provider-action-button"
-                onClick={() => {
-                  setConnectMenuOpen(false);
-                  setConnectView("bitbucket");
-                }}
-              >
-                <GitFork size={16} />
-                Bitbucket
-              </button>
+            </header>
+
+            <div className="settings-body">
+              <nav className="settings-nav" aria-label="Settings pages">
+                <button className={settingsPage === "general" ? "active" : ""} onClick={() => setSettingsPage("general")}>
+                  General
+                </button>
+                <button
+                  className={settingsPage === "connections" ? "active" : ""}
+                  onClick={() => setSettingsPage("connections")}
+                >
+                  Connections
+                </button>
+              </nav>
+
+              <div className="settings-panel">
+                {settingsPage === "general" && <p className="settings-empty">No general settings yet.</p>}
+                {settingsPage === "connections" && (
+                  <>
+                    <div className="dropdown-section">
+                      {settings.githubConnections.length === 0 && settings.bitbucketConnections.length === 0 && (
+                        <p>No accounts connected.</p>
+                      )}
+                      {settings.githubConnections.map((connection) => (
+                        <div className="connection-chip compact" key={`github-${connection.login}`}>
+                          <span>
+                            <CheckSquare2 className="connected-check" size={16} />
+                            GitHub: {connection.login}
+                          </span>
+                          <button
+                            className="link-button disconnect"
+                            onClick={() => void disconnectProvider("github", connection.login)}
+                          >
+                            Disconnect
+                          </button>
+                        </div>
+                      ))}
+                      {settings.bitbucketConnections.map((connection) => (
+                        <div className="connection-chip compact" key={`bitbucket-${connection.workspace}`}>
+                          <span>
+                            <CheckSquare2 className="connected-check" size={16} />
+                            Bitbucket: {connection.workspace}
+                          </span>
+                          <button
+                            className="link-button disconnect"
+                            onClick={() => void disconnectProvider("bitbucket", connection.workspace)}
+                          >
+                            Disconnect
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="dropdown-actions">
+                      <button
+                        className="provider-action-button"
+                        onClick={() => {
+                          setSettingsOpen(false);
+                          setConnectView("github");
+                        }}
+                      >
+                        <GitBranch size={16} />
+                        GitHub
+                      </button>
+                      <button
+                        className="provider-action-button"
+                        onClick={() => {
+                          setSettingsOpen(false);
+                          setConnectView("bitbucket");
+                        }}
+                      >
+                        <GitFork size={16} />
+                        Bitbucket
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
             </div>
           </section>
         </div>
