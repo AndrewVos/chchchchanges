@@ -350,6 +350,19 @@ button:disabled {
   padding-top: 10px;
 }
 
+.provider-action-button {
+  display: flex;
+  min-height: 38px;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid #334253;
+  border-radius: 8px;
+  background: #151d26;
+  color: #e7edf4;
+  padding: 0 11px;
+  text-align: left;
+}
+
 .connect-modal {
   width: min(460px, calc(100vw - 32px));
   border: 1px solid #334253;

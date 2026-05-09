@@ -12,6 +12,8 @@ import {
   X,
   CircleDot,
   Code2,
+  GitBranch,
+  GitFork,
   GitPullRequestArrow,
   MessageSquarePlus,
   PanelLeft,
@@ -583,22 +585,24 @@ export function App() {
             </div>
             <div className="dropdown-actions">
               <button
-                className="link-button"
+                className="provider-action-button"
                 onClick={() => {
                   setConnectMenuOpen(false);
                   setConnectView("github");
                 }}
               >
-                Connect GitHub account
+                <GitBranch size={16} />
+                GitHub
               </button>
               <button
-                className="link-button"
+                className="provider-action-button"
                 onClick={() => {
                   setConnectMenuOpen(false);
                   setConnectView("bitbucket");
                 }}
               >
-                Connect Bitbucket account
+                <GitFork size={16} />
+                Bitbucket
               </button>
             </div>
           </section>
