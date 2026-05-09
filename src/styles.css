@@ -424,15 +424,6 @@ button:disabled {
   padding: 12px;
 }
 
-.connect-action-panel {
-  display: flex;
-  justify-content: flex-end;
-}
-
-.connect-action-panel .approve {
-  width: 100%;
-}
-
 .connection-chip {
   display: flex;
   min-height: 40px;

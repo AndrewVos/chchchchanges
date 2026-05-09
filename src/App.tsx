@@ -631,42 +631,16 @@ export function App() {
             </header>
 
             <div className="provider-connect-list">
-              {connectView === "github" && (
-                <div className="connect-action-panel">
-                  <button
-                    className="approve"
-                    onClick={connectGitHub}
-                    disabled={!oauthConfig.githubClientId && !oauthConfig.githubBrokerUrl}
-                  >
-                    Connect GitHub account
-                  </button>
-                </div>
-              )}
-
               {connectView === "bitbucket" && (
-                <>
-                  <label className="workspace-field">
-                    Bitbucket workspace
-                    <input
-                      value={settings.bitbucketWorkspaces}
-                      onChange={(event) => updateSettings({ bitbucketWorkspaces: event.target.value })}
-                      placeholder="workspace-slug"
-                      autoFocus
-                    />
-                  </label>
-                  <div className="connect-action-panel">
-                    <button
-                      className="approve"
-                      onClick={connectBitbucket}
-                      disabled={
-                        (!oauthConfig.bitbucketClientId && !oauthConfig.bitbucketBrokerUrl) ||
-                        !settings.bitbucketWorkspaces.trim()
-                      }
-                    >
-                      Connect Bitbucket account
-                    </button>
-                  </div>
-                </>
+                <label className="workspace-field">
+                  Bitbucket workspace
+                  <input
+                    value={settings.bitbucketWorkspaces}
+                    onChange={(event) => updateSettings({ bitbucketWorkspaces: event.target.value })}
+                    placeholder="workspace-slug"
+                    autoFocus
+                  />
+                </label>
               )}
             </div>
 
@@ -675,6 +649,27 @@ export function App() {
                 Cancel
               </button>
               {oauthStatus && <p>{oauthStatus}</p>}
+              {connectView === "github" && (
+                <button
+                  className="approve"
+                  onClick={connectGitHub}
+                  disabled={!oauthConfig.githubClientId && !oauthConfig.githubBrokerUrl}
+                >
+                  Connect GitHub account
+                </button>
+              )}
+              {connectView === "bitbucket" && (
+                <button
+                  className="approve"
+                  onClick={connectBitbucket}
+                  disabled={
+                    (!oauthConfig.bitbucketClientId && !oauthConfig.bitbucketBrokerUrl) ||
+                    !settings.bitbucketWorkspaces.trim()
+                  }
+                >
+                  Connect Bitbucket account
+                </button>
+              )}
             </footer>
           </section>
         </div>
