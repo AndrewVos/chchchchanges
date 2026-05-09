@@ -40,10 +40,8 @@ Package a local macOS DMG:
 bun run dist:mac
 ```
 
-## What is included
+Bump, tag, and push a release:
 
-- GitHub and Bitbucket provider adapter model in `src/providers.ts`
-- Pull request sidebar with provider filtering and search
-- Changed-file rail and unified diff viewer
-- Syntax highlighting with `highlight.js`
-- Inline code comments routed through provider-specific `publishComment`
+```bash
+bun run release:patch
+```

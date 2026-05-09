@@ -11,6 +11,10 @@
     "dist:mac": "bun run build && electron-builder --mac --publish never",
     "cask:update": "bun scripts/update-homebrew-cask.mjs",
     "cask:check": "ruby -c Casks/chchchchanges.rb",
+    "release:version": "bun scripts/release-version.mjs",
+    "release:patch": "bun scripts/release-version.mjs patch",
+    "release:minor": "bun scripts/release-version.mjs minor",
+    "release:major": "bun scripts/release-version.mjs major",
     "preview": "vite preview --host 127.0.0.1"
   },
   "keywords": [],
