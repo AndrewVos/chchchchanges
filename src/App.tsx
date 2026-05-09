@@ -652,7 +652,6 @@ export function App() {
               <button className="ghost" onClick={() => setConnectView(null)}>
                 Cancel
               </button>
-              {oauthStatus && <p>{oauthStatus}</p>}
               {connectView === "github" && (
                 <button
                   className="approve"
