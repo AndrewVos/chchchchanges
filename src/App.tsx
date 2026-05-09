@@ -12,8 +12,6 @@ import {
   X,
   CircleDot,
   Code2,
-  GitBranch,
-  GitFork,
   GitPullRequestArrow,
   MessageSquarePlus,
   PanelLeft,
@@ -21,10 +19,12 @@ import {
   Send,
   Settings,
 } from "lucide-react";
+import { siBitbucket, siGithub } from "simple-icons";
 import { getCommentLineKey, languageFromPath, parseUnifiedDiff } from "./diff";
 import { loadAllPullRequests, providers } from "./providers";
 import { appConfig } from "./config";
 import type { AccountSettings, DiffLine, ProviderKind, PullRequestSummary, ReviewComment, ReviewFile } from "./types";
+import type { SimpleIcon } from "simple-icons";
 
 declare global {
   interface Window {
@@ -69,6 +69,48 @@ hljs.registerLanguage("json", json);
 const providerLabel: Record<ProviderKind, string> = {
   github: "GitHub",
   bitbucket: "Bitbucket",
+};
+
+function cn(...classes: Array<string | false | null | undefined>) {
+  return classes.filter(Boolean).join(" ");
+}
+
+function BrandIcon({ icon, className }: { icon: SimpleIcon; className?: string }) {
+  return (
+    <svg className={className} role="img" viewBox="0 0 24 24" aria-label={icon.title}>
+      <path fill="currentColor" d={icon.path} />
+    </svg>
+  );
+}
+
+const controls = {
+  ghost:
+    "inline-flex min-h-9 cursor-pointer items-center justify-center gap-2 rounded-lg border border-[#334253] bg-[#151d26] px-3 text-[#c8d3df] disabled:cursor-not-allowed disabled:opacity-55",
+  primary:
+    "inline-flex min-h-9 cursor-pointer items-center justify-center gap-2 rounded-lg border border-[#31b77a] bg-[#29a96f] px-3 font-bold text-[#06140e] disabled:cursor-not-allowed disabled:opacity-55",
+  icon:
+    "grid size-[34px] cursor-pointer place-items-center rounded-lg border border-[#334253] bg-[#151d26] text-[#c8d3df] disabled:cursor-not-allowed disabled:opacity-55",
+  link:
+    "cursor-pointer border-0 bg-transparent font-bold text-sky-300 underline underline-offset-[3px] disabled:cursor-not-allowed disabled:opacity-55",
+};
+
+const providerPillClasses: Record<ProviderKind, string> = {
+  github: "bg-emerald-300/15 text-emerald-200",
+  bitbucket: "bg-sky-300/15 text-sky-200",
+};
+
+const diffRowClasses: Record<DiffLine["kind"], string> = {
+  addition: "bg-green-500/10",
+  deletion: "bg-red-500/10",
+  context: "",
+  meta: "",
+};
+
+const diffMarkerClasses: Record<DiffLine["kind"], string> = {
+  addition: "text-[#7ddf9f]",
+  deletion: "text-[#ff9b9b]",
+  context: "text-[#91a0af]",
+  meta: "text-[#91a0af]",
 };
 
 const initialComments: ReviewComment[] = [
@@ -407,18 +449,18 @@ export function App() {
   }
 
   return (
-    <div className="app-shell">
-      <aside className="sidebar">
-        <div className="brand">
-          <div className="brand-mark">
+    <div className="grid min-h-screen grid-cols-[340px_minmax(0,1fr)] bg-[#101319] text-[#e7edf4] max-[1040px]:grid-cols-[300px_minmax(0,1fr)]">
+      <aside className="flex min-h-screen flex-col gap-[18px] border-r border-[#26313d] bg-[#141a22] px-[18px] pb-[18px] pt-[26px]">
+        <div className="flex items-center gap-3 pl-1.5">
+          <div className="grid size-[42px] place-items-center rounded-lg border border-[#3b4858] bg-[#1d2631] text-[#6ee7b7]">
             <GitPullRequestArrow size={20} />
           </div>
           <div>
-            <strong>Chchchchanges</strong>
-            <span>Pull request review</span>
+            <strong className="block text-[17px] tracking-normal">Chchchchanges</strong>
+            <span className="block text-[13px] text-[#91a0af]">Pull request review</span>
           </div>
           <button
-            className="brand-settings"
+            className="ml-auto grid size-9 cursor-pointer place-items-center rounded-lg border border-[#334253] bg-[#151d26] text-[#c8d3df]"
             onClick={() => {
               setSettingsPage("general");
               setSettingsOpen(true);
@@ -429,19 +471,33 @@ export function App() {
           </button>
         </div>
 
-        <div className="search-box">
+        <div className="flex h-[42px] items-center gap-2.5 rounded-lg border border-[#2d3947] bg-[#0f141b] px-3 text-[#91a0af]">
           <Search size={16} />
-          <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search PRs" />
+          <input
+            className="w-full border-0 bg-transparent text-[#e7edf4] outline-none"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Search PRs"
+          />
         </div>
 
-        <div className="provider-filter" aria-label="Provider filter">
-          <button className={selectedProvider === "all" ? "active" : ""} onClick={() => setSelectedProvider("all")}>
+        <div className="grid grid-cols-3 gap-1.5 rounded-lg bg-[#0f141b] p-[5px]" aria-label="Provider filter">
+          <button
+            className={cn(
+              "h-8 cursor-pointer rounded-md border-0 bg-transparent text-[#91a0af]",
+              selectedProvider === "all" && "bg-[#253241] text-[#f7fafc]",
+            )}
+            onClick={() => setSelectedProvider("all")}
+          >
             All
           </button>
           {providers.map((provider) => (
             <button
               key={provider.kind}
-              className={selectedProvider === provider.kind ? "active" : ""}
+              className={cn(
+                "h-8 cursor-pointer rounded-md border-0 bg-transparent text-[#91a0af]",
+                selectedProvider === provider.kind && "bg-[#253241] text-[#f7fafc]",
+              )}
               onClick={() => setSelectedProvider(provider.kind)}
             >
               {provider.label}
@@ -450,33 +506,44 @@ export function App() {
         </div>
 
         {loadErrors.length > 0 && (
-          <div className="notice">
+          <div className="flex flex-col gap-1.5 rounded-lg border border-[#665a34] bg-[#f0cf78]/10 px-3 py-2.5">
             {loadErrors.map((error) => (
-              <p key={error}>{error}</p>
+              <p className="m-0 text-xs leading-[1.4] text-[#f0cf78]" key={error}>
+                {error}
+              </p>
             ))}
           </div>
         )}
 
-        <div className="pr-list">
+        <div className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-auto pr-0.5">
           {visiblePullRequests.map((pr) => (
             <button
               key={pr.id}
-              className={`pr-card ${selectedPr?.id === pr.id ? "selected" : ""}`}
+              className={cn(
+                "flex w-full cursor-pointer flex-col gap-2 rounded-lg border border-[#26313d] bg-[#111820] p-3.5 text-left text-[#dbe6f0]",
+                selectedPr?.id === pr.id && "border-[#6ee7b7] bg-[#17212b]",
+              )}
               onClick={() => selectPullRequest(pr)}
             >
-              <span className={`provider-pill ${pr.provider}`}>{providerLabel[pr.provider]}</span>
-              {pr.isDemo && <span className="demo-pill">Demo</span>}
+              <span className={cn("w-fit rounded-full px-2 py-[3px] text-[11px] font-bold", providerPillClasses[pr.provider])}>
+                {providerLabel[pr.provider]}
+              </span>
+              {pr.isDemo && (
+                <span className="w-fit rounded-full border border-[#665a34] px-[7px] py-0.5 text-[11px] font-bold text-[#f5d987]">
+                  Demo
+                </span>
+              )}
               <strong>{pr.title}</strong>
-              <span className="muted">
+              <span className="text-[13px] text-[#91a0af]">
                 {pr.repo} #{pr.number}
               </span>
-              <span className="pr-meta">
+              <span className="flex items-center justify-between gap-2.5 text-xs text-[#91a0af]">
                 <span>{pr.author}</span>
                 <span>{pr.updatedAt}</span>
               </span>
-              <span className="stats">
-                <span className="plus">+{pr.additions}</span>
-                <span className="minus">-{pr.deletions}</span>
+              <span className="flex items-center justify-start gap-2.5 text-xs text-[#91a0af]">
+                <span className="text-[#7ddf9f]">+{pr.additions}</span>
+                <span className="text-[#ff9b9b]">-{pr.deletions}</span>
                 <span>{pr.comments} comments</span>
               </span>
             </button>
@@ -484,47 +551,50 @@ export function App() {
         </div>
       </aside>
 
-      <main className="review-pane">
+      <main className="min-h-screen min-w-0 p-[26px]">
         {selectedPr && selectedFile ? (
           <>
-            <header className="review-header">
+            <header className="mb-5 flex items-start justify-between gap-6">
               <div>
-                <div className="crumbs">
+                <div className="flex items-center gap-1.5 text-[13px] text-[#91a0af]">
                   <span>{providerLabel[selectedPr.provider]}</span>
                   <ChevronDown size={14} />
                   <span>{selectedPr.repo}</span>
                 </div>
-                <h1>{selectedPr.title}</h1>
-                <p>
+                <h1 className="my-2 max-w-[920px] text-[28px] leading-[1.15] tracking-normal">{selectedPr.title}</h1>
+                <p className="m-0 text-[#9eacba]">
                   #{selectedPr.number} from <strong>{selectedPr.branch}</strong> into{" "}
                   <strong>{selectedPr.target}</strong>
                 </p>
               </div>
-              <div className="review-actions">
-                <button className="ghost">
+              <div className="flex gap-2.5">
+                <button className={controls.ghost}>
                   <PanelLeft size={16} />
                   Files {selectedPr.files.length}
                 </button>
-                <button className="approve">
+                <button className={controls.primary}>
                   <CheckCircle2 size={16} />
                   Approve
                 </button>
               </div>
             </header>
 
-            <section className="workspace">
-              <nav className="file-rail" aria-label="Changed files">
+            <section className="grid min-h-[calc(100vh-154px)] grid-cols-[280px_minmax(0,1fr)] overflow-hidden rounded-lg border border-[#26313d] bg-[#0e141b] max-[1040px]:grid-cols-[220px_minmax(0,1fr)]">
+              <nav className="flex flex-col gap-1 border-r border-[#26313d] bg-[#121923] p-3" aria-label="Changed files">
                 {selectedPr.files.map((file) => (
                   <button
                     key={file.path}
-                    className={selectedFile.path === file.path ? "active" : ""}
+                    className={cn(
+                      "grid cursor-pointer grid-cols-[18px_minmax(0,1fr)] gap-2 rounded-[7px] border border-transparent bg-transparent p-2.5 text-left text-[#cbd7e3]",
+                      selectedFile.path === file.path && "border-[#3d4f63] bg-[#1a2430]",
+                    )}
                     onClick={() => setSelectedFilePath(file.path)}
                   >
                     <Code2 size={15} />
-                    <span>{file.path}</span>
-                    <span className="file-delta">
+                    <span className="break-words">{file.path}</span>
+                    <span className="col-start-2 flex gap-2 text-xs">
                       <b>+{file.additions}</b>
-                      <i>-{file.deletions}</i>
+                      <i className="not-italic text-[#ff9b9b]">-{file.deletions}</i>
                     </span>
                   </button>
                 ))}
@@ -543,11 +613,17 @@ export function App() {
             </section>
           </>
         ) : (
-          <div className="empty-state">
-            <div>
-              <h2>No accounts connected</h2>
-              <p>Connect GitHub or Bitbucket to review pull requests.</p>
-              <button className="approve" onClick={() => { setSettingsPage("connections"); setSettingsOpen(true); }}>
+          <div className="grid min-h-[60vh] place-items-center text-center text-[#91a0af]">
+            <div className="flex max-w-[360px] flex-col items-center gap-3">
+              <h2 className="m-0 text-[22px] tracking-normal text-[#e7edf4]">No accounts connected</h2>
+              <p className="m-0">Connect GitHub or Bitbucket to review pull requests.</p>
+              <button
+                className={controls.primary}
+                onClick={() => {
+                  setSettingsPage("connections");
+                  setSettingsOpen(true);
+                }}
+              >
                 Settings
               </button>
             </div>
@@ -556,53 +632,73 @@ export function App() {
       </main>
 
       {settingsOpen && (
-        <div className="modal-backdrop" role="presentation" onMouseDown={() => setSettingsOpen(false)}>
+        <div
+          className="fixed inset-0 z-20 grid place-items-center bg-[#05080c]/60 p-6"
+          role="presentation"
+          onMouseDown={() => setSettingsOpen(false)}
+        >
           <section
-            className="connect-modal settings-modal"
+            className="w-[min(640px,calc(100vw-32px))] rounded-lg border border-[#334253] bg-[#121923] text-[#e7edf4] shadow-2xl"
             role="dialog"
             aria-modal="true"
             aria-labelledby="settings-title"
             onMouseDown={(event) => event.stopPropagation()}
           >
-            <header>
+            <header className="flex items-start justify-between gap-4 border-b border-[#253241] p-4">
               <div>
-                <h2 id="settings-title">Settings</h2>
-                <p>{settingsPage === "general" ? "General app preferences." : "Accounts used to load pull requests."}</p>
+                <h2 className="m-0 text-lg tracking-normal" id="settings-title">
+                  Settings
+                </h2>
+                <p className="m-0 text-[13px] text-[#91a0af]">
+                  {settingsPage === "general" ? "General app preferences." : "Accounts used to load pull requests."}
+                </p>
               </div>
-              <button className="icon-button" onClick={() => setSettingsOpen(false)} aria-label="Close">
+              <button className={controls.icon} onClick={() => setSettingsOpen(false)} aria-label="Close">
                 <X size={18} />
               </button>
             </header>
 
-            <div className="settings-body">
-              <nav className="settings-nav" aria-label="Settings pages">
-                <button className={settingsPage === "general" ? "active" : ""} onClick={() => setSettingsPage("general")}>
+            <div className="grid min-h-[300px] grid-cols-[160px_minmax(0,1fr)]">
+              <nav className="flex flex-col gap-1.5 border-r border-[#253241] p-3.5" aria-label="Settings pages">
+                <button
+                  className={cn(
+                    "h-9 cursor-pointer rounded-lg border border-transparent bg-transparent px-2.5 text-left text-[#91a0af]",
+                    settingsPage === "general" && "border-[#3d4f63] bg-[#1a2430] text-[#e7edf4]",
+                  )}
+                  onClick={() => setSettingsPage("general")}
+                >
                   General
                 </button>
                 <button
-                  className={settingsPage === "connections" ? "active" : ""}
+                  className={cn(
+                    "h-9 cursor-pointer rounded-lg border border-transparent bg-transparent px-2.5 text-left text-[#91a0af]",
+                    settingsPage === "connections" && "border-[#3d4f63] bg-[#1a2430] text-[#e7edf4]",
+                  )}
                   onClick={() => setSettingsPage("connections")}
                 >
                   Connections
                 </button>
               </nav>
 
-              <div className="settings-panel">
-                {settingsPage === "general" && <p className="settings-empty">No general settings yet.</p>}
+              <div className="flex min-w-0 flex-col gap-3 p-3.5">
+                {settingsPage === "general" && <p className="m-0 text-[#91a0af]">No general settings yet.</p>}
                 {settingsPage === "connections" && (
                   <>
-                    <div className="dropdown-section">
+                    <div className="flex flex-col gap-2">
                       {settings.githubConnections.length === 0 && settings.bitbucketConnections.length === 0 && (
-                        <p>No accounts connected.</p>
+                        <p className="m-0 text-[13px] text-[#91a0af]">No accounts connected.</p>
                       )}
                       {settings.githubConnections.map((connection) => (
-                        <div className="connection-chip compact" key={`github-${connection.login}`}>
-                          <span>
-                            <CheckSquare2 className="connected-check" size={16} />
+                        <div
+                          className="flex min-h-[34px] items-center justify-between gap-3 rounded-lg border border-[#253241] bg-[#151d26] px-[9px] py-[7px] text-[13px]"
+                          key={`github-${connection.login}`}
+                        >
+                          <span className="inline-flex min-w-0 items-center gap-2 break-words">
+                            <CheckSquare2 className="text-[#7ddf9f]" size={16} />
                             GitHub: {connection.login}
                           </span>
                           <button
-                            className="link-button disconnect"
+                            className={cn(controls.link, "text-[#ffb4b4]")}
                             onClick={() => void disconnectProvider("github", connection.login)}
                           >
                             Disconnect
@@ -610,13 +706,16 @@ export function App() {
                         </div>
                       ))}
                       {settings.bitbucketConnections.map((connection) => (
-                        <div className="connection-chip compact" key={`bitbucket-${connection.workspace}`}>
-                          <span>
-                            <CheckSquare2 className="connected-check" size={16} />
+                        <div
+                          className="flex min-h-[34px] items-center justify-between gap-3 rounded-lg border border-[#253241] bg-[#151d26] px-[9px] py-[7px] text-[13px]"
+                          key={`bitbucket-${connection.workspace}`}
+                        >
+                          <span className="inline-flex min-w-0 items-center gap-2 break-words">
+                            <CheckSquare2 className="text-[#7ddf9f]" size={16} />
                             Bitbucket: {connection.workspace}
                           </span>
                           <button
-                            className="link-button disconnect"
+                            className={cn(controls.link, "text-[#ffb4b4]")}
                             onClick={() => void disconnectProvider("bitbucket", connection.workspace)}
                           >
                             Disconnect
@@ -624,26 +723,26 @@ export function App() {
                         </div>
                       ))}
                     </div>
-                    <div className="dropdown-actions">
+                    <div className="flex flex-col gap-2 border-t border-[#253241] pt-2.5">
                       <button
-                        className="provider-action-button"
+                        className="flex min-h-[38px] cursor-pointer items-center gap-2.5 rounded-lg border border-[#334253] bg-[#151d26] px-[11px] text-left text-[#e7edf4]"
                         onClick={() => {
                           setSettingsOpen(false);
                           setConnectView("github");
                         }}
                       >
-                        <GitBranch size={16} />
-                        GitHub
+                        <BrandIcon icon={siGithub} className="size-4 text-[#e7edf4]" />
+                        Connect GitHub
                       </button>
                       <button
-                        className="provider-action-button"
+                        className="flex min-h-[38px] cursor-pointer items-center gap-2.5 rounded-lg border border-[#334253] bg-[#151d26] px-[11px] text-left text-[#e7edf4]"
                         onClick={() => {
                           setSettingsOpen(false);
                           setConnectView("bitbucket");
                         }}
                       >
-                        <GitFork size={16} />
-                        Bitbucket
+                        <BrandIcon icon={siBitbucket} className="size-4 text-[#2684ff]" />
+                        Connect Bitbucket
                       </button>
                     </div>
                   </>
@@ -655,35 +754,40 @@ export function App() {
       )}
 
       {connectView && (
-        <div className="modal-backdrop" role="presentation" onMouseDown={() => setConnectView(null)}>
+        <div
+          className="fixed inset-0 z-20 grid place-items-center bg-[#05080c]/60 p-6"
+          role="presentation"
+          onMouseDown={() => setConnectView(null)}
+        >
           <section
-            className="connect-modal"
+            className="w-[min(460px,calc(100vw-32px))] rounded-lg border border-[#334253] bg-[#121923] text-[#e7edf4] shadow-2xl"
             role="dialog"
             aria-modal="true"
             aria-labelledby="connect-title"
             onMouseDown={(event) => event.stopPropagation()}
           >
-            <header>
+            <header className="flex items-start justify-between gap-4 border-b border-[#253241] p-4">
               <div>
-                <h2 id="connect-title">
+                <h2 className="m-0 text-lg tracking-normal" id="connect-title">
                   {connectView === "github" && "Connect GitHub"}
                   {connectView === "bitbucket" && "Connect Bitbucket"}
                 </h2>
-                <p>
+                <p className="m-0 text-[13px] text-[#91a0af]">
                   {connectView === "github" && "Authorize a GitHub account in your browser."}
                   {connectView === "bitbucket" && "Choose a workspace, then authorize Bitbucket."}
                 </p>
               </div>
-              <button className="icon-button" onClick={() => setConnectView(null)} aria-label="Close">
+              <button className={controls.icon} onClick={() => setConnectView(null)} aria-label="Close">
                 <X size={18} />
               </button>
             </header>
 
-            <div className="provider-connect-list">
+            <div className="flex flex-col gap-2.5 px-4 pb-4 pt-3.5">
               {connectView === "bitbucket" && (
-                <label className="workspace-field">
+                <label className="mt-1 flex flex-col gap-[5px] text-[13px] text-[#91a0af]">
                   Bitbucket workspace
                   <input
+                    className="h-[38px] min-w-0 rounded-[7px] border border-[#334253] bg-[#0d1218] px-2.5 text-[#e7edf4] outline-none"
                     value={settings.bitbucketWorkspaces}
                     onChange={(event) => updateSettings({ bitbucketWorkspaces: event.target.value })}
                     placeholder="workspace-slug"
@@ -693,13 +797,13 @@ export function App() {
               )}
             </div>
 
-            <footer>
-              <button className="ghost" onClick={() => setConnectView(null)}>
+            <footer className="flex items-center justify-between gap-4 border-t border-[#253241] p-4">
+              <button className={controls.ghost} onClick={() => setConnectView(null)}>
                 Cancel
               </button>
               {connectView === "github" && (
                 <button
-                  className="approve"
+                  className={controls.primary}
                   onClick={connectGitHub}
                   disabled={!oauthConfig.githubClientId && !oauthConfig.githubBrokerUrl}
                 >
@@ -708,7 +812,7 @@ export function App() {
               )}
               {connectView === "bitbucket" && (
                 <button
-                  className="approve"
+                  className={controls.primary}
                   onClick={connectBitbucket}
                   disabled={
                     (!oauthConfig.bitbucketClientId && !oauthConfig.bitbucketBrokerUrl) ||
@@ -751,41 +855,56 @@ function DiffViewer({
   const language = languageFromPath(file.path);
 
   return (
-    <div className="diff-wrap">
-      <div className="file-header">
-        <div>
+    <div className="min-w-0 overflow-hidden">
+      <div className="flex min-h-[54px] items-center justify-between border-b border-[#26313d] bg-[#141c25] px-4">
+        <div className="flex items-center gap-2.5">
           <strong>{file.path}</strong>
-          <span>{file.status}</span>
+          <span className="text-[13px] text-[#91a0af]">{file.status}</span>
         </div>
-        <div className="file-summary">
-          <span className="plus">+{file.additions}</span>
-          <span className="minus">-{file.deletions}</span>
+        <div className="flex items-center gap-2.5 text-[13px]">
+          <span className="text-[#7ddf9f]">+{file.additions}</span>
+          <span className="text-[#ff9b9b]">-{file.deletions}</span>
         </div>
       </div>
 
-      <div className="diff-table" role="table" aria-label={`${file.path} unified diff`}>
+      <div
+        className="max-h-[calc(100vh-208px)] overflow-auto font-mono text-[13px] leading-[1.55]"
+        role="table"
+        aria-label={`${file.path} unified diff`}
+      >
         {hunks.map((hunk) => (
-          <div className="hunk" key={hunk.header}>
-            <div className="hunk-header">{hunk.header}</div>
+          <div key={hunk.header}>
+            <div className="sticky top-0 z-[2] border-b border-[#24303c] bg-[#1b2734] px-3.5 py-[7px] text-[#8fb9ff]">
+              {hunk.header}
+            </div>
             {hunk.lines.map((line) => {
               const lineKey = getCommentLineKey(file.path, line);
               const lineComments = comments.filter(
                 (comment) => comment.prId === pr.id && comment.filePath === file.path && comment.lineKey === lineKey,
               );
               return (
-                <div className="diff-row-group" key={line.key}>
-                  <div className={`diff-row ${line.kind}`}>
-                    <span className="gutter old">{line.oldLine ?? ""}</span>
-                    <span className="gutter new">{line.newLine ?? ""}</span>
+                <div key={line.key}>
+                  <div
+                    className={cn(
+                      "group grid min-h-[25px] grid-cols-[58px_58px_34px_minmax(720px,1fr)] border-b border-[#26313d]/60 max-[1040px]:grid-cols-[46px_46px_32px_minmax(620px,1fr)]",
+                      diffRowClasses[line.kind],
+                    )}
+                  >
+                    <span className="select-none border-r border-[#26313d]/75 px-2.5 py-0.5 text-right text-[#6d7d8d]">
+                      {line.oldLine ?? ""}
+                    </span>
+                    <span className="select-none border-r border-[#26313d]/75 px-2.5 py-0.5 text-right text-[#6d7d8d]">
+                      {line.newLine ?? ""}
+                    </span>
                     <button
-                      className="comment-trigger"
+                      className="grid w-full cursor-pointer place-items-center border-0 border-r border-[#26313d]/75 bg-transparent text-transparent group-hover:text-[#9fb2c5] focus-visible:text-[#9fb2c5]"
                       title="Add inline comment"
                       onClick={() => onActivateLine(activeLineKey === lineKey ? null : lineKey)}
                     >
                       <MessageSquarePlus size={14} />
                     </button>
-                    <code className="code-line">
-                      <span className="diff-marker">
+                    <code className="min-w-0 whitespace-pre px-3 py-0.5">
+                      <span className={cn("mr-3 inline-block", diffMarkerClasses[line.kind])}>
                         {line.kind === "addition" ? "+" : line.kind === "deletion" ? "-" : " "}
                       </span>
                       <span dangerouslySetInnerHTML={{ __html: highlightCode(line.content, language) }} />
@@ -793,32 +912,36 @@ function DiffViewer({
                   </div>
 
                   {lineComments.map((comment) => (
-                    <div className="inline-comment" key={comment.id}>
-                      <CircleDot size={14} />
+                    <div
+                      className="mb-2.5 ml-[150px] mr-[18px] mt-2 flex gap-2.5 rounded-lg border border-[#334253] bg-[#151d26] p-3 text-[#dce6ef] max-[1040px]:ml-[124px]"
+                      key={comment.id}
+                    >
+                      <CircleDot className="mt-[3px] text-[#f2c96d]" size={14} />
                       <div>
                         <strong>
                           {comment.author}
                           {comment.pending ? " (pending)" : ""}
                         </strong>
-                        <p>{comment.body}</p>
-                        <span>{comment.createdAt}</span>
+                        <p className="my-1 text-[#c5d0dc]">{comment.body}</p>
+                        <span className="text-xs text-[#7d8b99]">{comment.createdAt}</span>
                       </div>
                     </div>
                   ))}
 
                   {activeLineKey === lineKey && (
-                    <div className="comment-composer">
+                    <div className="mb-2.5 ml-[150px] mr-[18px] mt-2 rounded-lg border border-[#334253] bg-[#151d26] p-2.5 max-[1040px]:ml-[124px]">
                       <textarea
+                        className="block min-h-[86px] w-full resize-y rounded-[7px] border border-[#334253] bg-[#0d1218] p-2.5 text-[#e7edf4] outline-none"
                         value={draft}
                         onChange={(event) => onDraftChange(event.target.value)}
                         placeholder={`Comment on ${file.path}:${line.newLine ?? line.oldLine}`}
                         autoFocus
                       />
-                      <div>
-                        <button className="ghost" onClick={() => onActivateLine(null)}>
+                      <div className="mt-2.5 flex justify-end gap-2">
+                        <button className={controls.ghost} onClick={() => onActivateLine(null)}>
                           Cancel
                         </button>
-                        <button className="send" onClick={() => onSubmit(file, line)}>
+                        <button className={controls.primary} onClick={() => onSubmit(file, line)}>
                           <Send size={15} />
                           Add comment
                         </button>
