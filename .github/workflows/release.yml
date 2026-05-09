@@ -96,12 +96,12 @@ jobs:
         shell: bash
         run: |
           if [[ -z "${HOMEBREW_TAP_TOKEN:-}" ]]; then
-            echo "Skipping tap sync. Set HOMEBREW_TAP_TOKEN to update AndrewVos/homebrew-chchchchanges."
+            echo "Skipping tap sync. Set HOMEBREW_TAP_TOKEN to update AndrewVos/homebrew-tap."
             exit 0
           fi
 
           TAP_DIR="$(mktemp -d)"
-          git clone "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/AndrewVos/homebrew-chchchchanges.git" "$TAP_DIR"
+          git clone "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/AndrewVos/homebrew-tap.git" "$TAP_DIR"
           mkdir -p "$TAP_DIR/Casks"
           cp Casks/chchchchanges.rb "$TAP_DIR/Casks/chchchchanges.rb"
           cd "$TAP_DIR"

@@ -5,8 +5,7 @@ Review GitHub and Bitbucket pull requests from one desktop app, with a focused P
 ## Install
 
 ```bash
-brew tap AndrewVos/chchchchanges https://github.com/AndrewVos/chchchchanges
-brew install --cask chchchchanges
+brew install --cask AndrewVos/tap/chchchchanges
 ```
 
 The current desktop build is unsigned and not notarized. If macOS blocks the first launch after Homebrew installs it:
