@@ -304,9 +304,9 @@ button:disabled {
   inset: 0;
   z-index: 20;
   display: grid;
-  place-items: start end;
+  place-items: center;
   background: rgba(5, 8, 12, 0.58);
-  padding: 72px 34px;
+  padding: 24px;
 }
 
 .connect-modal {

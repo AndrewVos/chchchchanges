@@ -662,10 +662,10 @@ export function App() {
               ) : (
                 <div className="connect-links">
                   <button className="link-button" onClick={() => setConnectView("github")}>
-                    GitHub
+                    Connect GitHub
                   </button>
                   <button className="link-button" onClick={() => setConnectView("bitbucket")}>
-                    Bitbucket
+                    Connect Bitbucket
                   </button>
                 </div>
               )}
