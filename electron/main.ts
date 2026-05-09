@@ -143,7 +143,7 @@ ipcMain.handle("oauth:github-device-start", async (_event, clientId: string) => 
     },
     body: JSON.stringify({
       client_id: clientId,
-      scope: "repo read:user",
+      scope: "repo read:user notifications",
     }),
   });
   if (!response.ok) {
@@ -190,7 +190,7 @@ ipcMain.handle("oauth:github-broker", async (_event, clientId: string, brokerUrl
   } else {
     authUrl.searchParams.set("client_id", clientId);
     authUrl.searchParams.set("redirect_uri", githubRedirectUri);
-    authUrl.searchParams.set("scope", "repo read:user");
+    authUrl.searchParams.set("scope", "repo read:user notifications");
     authUrl.searchParams.set("state", state);
   }
   console.log(`[oauth] opening github auth via ${brokerUrl ? "broker" : "direct"} with state ${state}`);

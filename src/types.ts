@@ -3,6 +3,7 @@ export type ProviderKind = "github" | "bitbucket";
 export type ReviewState = "changes-requested" | "approved" | "commented" | "waiting";
 
 export type PullRequestViewerRole = "author" | "reviewer" | "assignee" | "mentioned" | "participant";
+export type PullRequestInboxReason = "author" | "reviewer" | "mentioned" | "watched";
 
 export type PullRequestSummary = {
   id: string;
@@ -18,11 +19,13 @@ export type PullRequestSummary = {
   target: string;
   targetUrl?: string;
   updatedAt: string;
+  updatedAtIso: string;
   additions: number;
   deletions: number;
   comments: number;
   state: ReviewState;
   viewerRoles?: PullRequestViewerRole[];
+  inboxReasons?: PullRequestInboxReason[];
   files: ReviewFile[];
   filesLoaded?: boolean;
   connectionId?: string;

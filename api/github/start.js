@@ -39,7 +39,7 @@ module.exports = async function handler(req, res) {
   const authUrl = new URL("https://github.com/login/oauth/authorize");
   authUrl.searchParams.set("client_id", clientId);
   authUrl.searchParams.set("redirect_uri", `${baseUrl(req)}/api/github/callback`);
-  authUrl.searchParams.set("scope", "repo read:user");
+  authUrl.searchParams.set("scope", "repo read:user notifications");
   authUrl.searchParams.set("state", brokerState);
   authUrl.searchParams.set("prompt", "select_account");
 

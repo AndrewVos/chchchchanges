@@ -11,6 +11,7 @@ import {
   CheckCircle2,
   CheckSquare2,
   ChevronDown,
+  Clock3,
   X,
   CircleDot,
   Code2,
@@ -29,7 +30,7 @@ import {
 import { siBitbucket, siGithub } from "simple-icons";
 import { getCommentLineKey, languageFromPath, parseUnifiedDiff } from "./diff";
 import {
-  loadAllPullRequests,
+  loadInboxPullRequests,
   loadPullRequestFiles,
   providers,
   type LoadProgress,
@@ -39,6 +40,7 @@ import type {
   AccountSettings,
   DiffLine,
   ProviderKind,
+  PullRequestInboxReason,
   PullRequestSummary,
   PullRequestViewerRole,
   ReviewComment,
@@ -92,28 +94,41 @@ const providerLabel: Record<ProviderKind, string> = {
   bitbucket: "Bitbucket",
 };
 
-type PullRequestScope = PullRequestViewerRole;
 type ToastTone = "info" | "success" | "error";
 type Toast = { id: string; message: string; tone: ToastTone };
 type ThemePreference = "system" | "light" | "dark";
 type ResolvedTheme = "light" | "dark";
 type ProviderProgressState = Record<ProviderKind, { completed: number; total: number }>;
+type InboxState = {
+  readAtByPrId: Record<string, string>;
+  snoozedUntilByPrId: Record<string, string>;
+};
+type SnoozeOption = { label: string; milliseconds: number };
 
-const scopeFilters: Array<{ value: PullRequestScope; label: string }> = [
-  { value: "reviewer", label: "Needs my review" },
-  { value: "author", label: "Created by me" },
-  { value: "assignee", label: "Assigned to me" },
-  { value: "mentioned", label: "Mentions me" },
-  { value: "participant", label: "Participating" },
-];
-
-const roleLabels: Record<PullRequestViewerRole, string> = {
+const inboxReasonLabels: Record<PullRequestInboxReason, string> = {
   author: "Mine",
   reviewer: "Review",
-  assignee: "Assigned",
   mentioned: "Mentioned",
-  participant: "Participating",
+  watched: "Watched",
 };
+
+const snoozeOptions: SnoozeOption[] = [
+  { label: "1 hour", milliseconds: 60 * 60 * 1000 },
+  { label: "3 hours", milliseconds: 3 * 60 * 60 * 1000 },
+  { label: "1 day", milliseconds: 24 * 60 * 60 * 1000 },
+  { label: "1 week", milliseconds: 7 * 24 * 60 * 60 * 1000 },
+  { label: "2 weeks", milliseconds: 14 * 24 * 60 * 60 * 1000 },
+  { label: "1 month", milliseconds: 30 * 24 * 60 * 60 * 1000 },
+];
+
+function inboxReasonForRole(role: PullRequestViewerRole): PullRequestInboxReason | undefined {
+  if (role === "author" || role === "reviewer" || role === "mentioned") return role;
+  return undefined;
+}
+
+function isInboxReason(value: PullRequestInboxReason | undefined): value is PullRequestInboxReason {
+  return value !== undefined;
+}
 
 function emptyProviderProgress(): ProviderProgressState {
   return {
@@ -139,11 +154,14 @@ function mergePullRequests(current: PullRequestSummary[], incoming: PullRequestS
             files: pullRequest.filesLoaded ? pullRequest.files : existing.filesLoaded ? existing.files : pullRequest.files,
             filesLoaded: existing.filesLoaded || pullRequest.filesLoaded,
             viewerRoles: [...new Set([...(existing.viewerRoles ?? []), ...(pullRequest.viewerRoles ?? [])])],
+            inboxReasons: [...new Set([...(existing.inboxReasons ?? []), ...(pullRequest.inboxReasons ?? [])])],
           }
         : pullRequest,
     );
   }
-  return [...items.values()];
+  return [...items.values()].sort(
+    (left, right) => new Date(right.updatedAtIso).getTime() - new Date(left.updatedAtIso).getTime(),
+  );
 }
 
 function filterButtonClasses(active: boolean) {
@@ -158,6 +176,21 @@ function filterButtonClasses(active: boolean) {
 function loadThemePreference(): ThemePreference {
   const stored = localStorage.getItem("reviewDesk.theme");
   return stored === "light" || stored === "dark" || stored === "system" ? stored : "system";
+}
+
+function loadInboxState(): InboxState {
+  try {
+    const stored = JSON.parse(localStorage.getItem("reviewDesk.inboxState") ?? "{}") as Partial<InboxState>;
+    return {
+      readAtByPrId: stored.readAtByPrId && typeof stored.readAtByPrId === "object" ? stored.readAtByPrId : {},
+      snoozedUntilByPrId:
+        stored.snoozedUntilByPrId && typeof stored.snoozedUntilByPrId === "object"
+          ? stored.snoozedUntilByPrId
+          : {},
+    };
+  } catch {
+    return { readAtByPrId: {}, snoozedUntilByPrId: {} };
+  }
 }
 
 function getSystemTheme(): ResolvedTheme {
@@ -349,7 +382,6 @@ function loadPercent(progress: { completed: number; total: number }) {
 export function App() {
   const [pullRequests, setPullRequests] = useState<PullRequestSummary[]>([]);
   const [selectedProvider, setSelectedProvider] = useState<ProviderKind | "all">("all");
-  const [selectedScope, setSelectedScope] = useState<PullRequestScope>("reviewer");
   const [selectedPrId, setSelectedPrId] = useState<string>("");
   const [selectedFilePath, setSelectedFilePath] = useState<string>("");
   const [query, setQuery] = useState("");
@@ -367,6 +399,8 @@ export function App() {
   const [providerProgress, setProviderProgress] = useState<ProviderProgressState>(emptyProviderProgress);
   const [loadingFileIds, setLoadingFileIds] = useState<Set<string>>(() => new Set());
   const [failedFileIds, setFailedFileIds] = useState<Set<string>>(() => new Set());
+  const [inboxState, setInboxState] = useState<InboxState>(loadInboxState);
+  const [now, setNow] = useState(() => Date.now());
   const [themePreference, setThemePreference] = useState<ThemePreference>(loadThemePreference);
   const [systemTheme, setSystemTheme] = useState<ResolvedTheme>(getSystemTheme);
   const refreshIdRef = useRef("");
@@ -388,11 +422,20 @@ export function App() {
   }, [themePreference]);
 
   useEffect(() => {
+    localStorage.setItem("reviewDesk.inboxState", JSON.stringify(inboxState));
+  }, [inboxState]);
+
+  useEffect(() => {
     const query = window.matchMedia("(prefers-color-scheme: light)");
     const updateTheme = () => setSystemTheme(query.matches ? "light" : "dark");
     updateTheme();
     query.addEventListener("change", updateTheme);
     return () => query.removeEventListener("change", updateTheme);
+  }, []);
+
+  useEffect(() => {
+    const interval = window.setInterval(() => setNow(Date.now()), 60_000);
+    return () => window.clearInterval(interval);
   }, []);
 
   useEffect(() => {
@@ -407,7 +450,7 @@ export function App() {
     setToasts((items) => [...items.slice(-2), { id: crypto.randomUUID(), message, tone }]);
   }
 
-  async function refreshPullRequests(nextSettings = settings, scope = selectedScope) {
+  async function refreshPullRequests(nextSettings = settings) {
     const refreshId = crypto.randomUUID();
     refreshIdRef.current = refreshId;
     setPullRequests([]);
@@ -420,7 +463,7 @@ export function App() {
     setProviderProgress(emptyProviderProgress());
     setIsLoading(true);
     try {
-      const result = await loadAllPullRequests(nextSettings, scope, {
+      const result = await loadInboxPullRequests(nextSettings, {
         onPullRequests: (items) => {
           if (refreshIdRef.current !== refreshId || items.length === 0) return;
           setPullRequests((current) => mergePullRequests(current, items));
@@ -632,33 +675,24 @@ export function App() {
   const visiblePullRequests = useMemo(() => {
     return pullRequests.filter((pr) => {
       const providerMatch = selectedProvider === "all" || pr.provider === selectedProvider;
-      const scopeMatch = pr.viewerRoles?.includes(selectedScope);
+      const snoozedUntil = inboxState.snoozedUntilByPrId[pr.id];
+      const snoozed = snoozedUntil ? new Date(snoozedUntil).getTime() > now : false;
       const textMatch = `${pr.title} ${pr.repo} ${pr.author}`.toLowerCase().includes(query.toLowerCase());
-      return providerMatch && scopeMatch && textMatch;
+      return providerMatch && !snoozed && textMatch;
     });
-  }, [pullRequests, query, selectedProvider, selectedScope]);
+  }, [inboxState.snoozedUntilByPrId, now, pullRequests, query, selectedProvider]);
   const providerCounts = useMemo(() => {
     return pullRequests.reduce(
       (counts, pr) => {
-        if (pr.viewerRoles?.includes(selectedScope)) counts[pr.provider] += 1;
+        const snoozedUntil = inboxState.snoozedUntilByPrId[pr.id];
+        const snoozed = snoozedUntil ? new Date(snoozedUntil).getTime() > now : false;
+        if (!snoozed) counts[pr.provider] += 1;
         return counts;
       },
       { github: 0, bitbucket: 0 } satisfies Record<ProviderKind, number>,
     );
-  }, [pullRequests, selectedScope]);
+  }, [inboxState.snoozedUntilByPrId, now, pullRequests]);
   const totalProviderCount = providerCounts.github + providerCounts.bitbucket;
-  const scopeCounts = useMemo(() => {
-    return scopeFilters.reduce(
-      (counts, scope) => {
-        counts[scope.value] = pullRequests.filter((pr) => {
-          const providerMatch = selectedProvider === "all" || pr.provider === selectedProvider;
-          return providerMatch && Boolean(pr.viewerRoles?.includes(scope.value));
-        }).length;
-        return counts;
-      },
-      {} as Record<PullRequestScope, number>,
-    );
-  }, [pullRequests, selectedProvider]);
   const connectedProviders = useMemo(
     () => ({
       github: settings.githubConnections.length > 0,
@@ -689,7 +723,7 @@ export function App() {
   const selectedFilesLoading = Boolean(selectedPr && loadingFileIds.has(selectedPr.id));
   const selectedDescription = selectedPr?.description?.trim() ?? "";
   const hasConnectedAccounts = settings.githubConnections.length > 0 || settings.bitbucketConnections.length > 0;
-  const isFiltered = selectedProvider !== "all" || selectedScope !== "reviewer" || query.trim().length > 0;
+  const isFiltered = selectedProvider !== "all" || query.trim().length > 0;
   const markdownComponents = useMemo<Components>(
     () => ({
       a({ href, children, className, ...props }) {
@@ -849,6 +883,29 @@ export function App() {
     setSelectedFilePath(pr.files[0]?.path ?? "");
     setActiveLineKey(null);
     setDraft("");
+    setInboxState((current) => ({
+      ...current,
+      readAtByPrId: { ...current.readAtByPrId, [pr.id]: new Date().toISOString() },
+    }));
+  }
+
+  function isPullRequestUnread(pr: PullRequestSummary) {
+    const readAt = inboxState.readAtByPrId[pr.id];
+    return !readAt || new Date(pr.updatedAtIso).getTime() > new Date(readAt).getTime();
+  }
+
+  function snoozePullRequest(pr: PullRequestSummary, option: SnoozeOption) {
+    const snoozedUntil = new Date(Date.now() + option.milliseconds).toISOString();
+    setInboxState((current) => ({
+      ...current,
+      snoozedUntilByPrId: { ...current.snoozedUntilByPrId, [pr.id]: snoozedUntil },
+    }));
+    showToast(`Snoozed ${pr.repo} #${pr.number} for ${option.label}.`);
+    if (selectedPrId === pr.id) {
+      const nextPr = visiblePullRequests.find((item) => item.id !== pr.id);
+      setSelectedPrId(nextPr?.id ?? "");
+      setSelectedFilePath(nextPr?.files[0]?.path ?? "");
+    }
   }
 
   async function addComment(file: ReviewFile, line: DiffLine) {
@@ -953,52 +1010,77 @@ export function App() {
           ))}
         </div>
 
-        <div className="flex flex-wrap gap-1.5 rounded-lg bg-[var(--surface-3)] p-[5px]" aria-label="Pull request scope filter">
-          {scopeFilters.map((scope) => (
-            <button
-              key={scope.value}
-              className={filterButtonClasses(selectedScope === scope.value)}
-              onClick={() => {
-                setSelectedScope(scope.value);
-                void refreshPullRequests(settings, scope.value);
-              }}
-            >
-              {scope.label} <span className="text-[var(--text-muted)]">{scopeCounts[scope.value] ?? 0}</span>
-            </button>
-          ))}
-        </div>
-
         <div className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-auto pr-0.5">
-          {visiblePullRequests.map((pr) => (
-            <button
+          {visiblePullRequests.map((pr) => {
+            const unread = isPullRequestUnread(pr);
+            const reasons = pr.inboxReasons?.length
+              ? pr.inboxReasons
+              : pr.viewerRoles?.map((role) => inboxReasonForRole(role)).filter(isInboxReason);
+            return (
+            <article
               key={pr.id}
+              role="button"
+              tabIndex={0}
               className={cn(
-                "flex w-full cursor-pointer flex-col gap-2 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-3.5 text-left text-[var(--text-card)]",
+                "flex w-full cursor-pointer flex-col gap-2 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-3.5 text-left text-[var(--text-card)] outline-none",
                 selectedPr?.id === pr.id && "border-[var(--accent)] bg-[var(--surface-4)]",
+                unread && "border-[var(--border-strong)]",
               )}
               onClick={() => selectPullRequest(pr)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") selectPullRequest(pr);
+              }}
             >
-              <span className={cn("w-fit rounded-full px-2 py-[3px] text-[11px] font-bold", providerPillClasses[pr.provider])}>
-                {providerLabel[pr.provider]}
+              <span className="flex items-start justify-between gap-2">
+                <span className="flex flex-wrap items-center gap-1.5">
+                  {unread && <span className="size-2 rounded-full bg-[var(--accent)]" aria-label="Unread" />}
+                  <span className={cn("w-fit rounded-full px-2 py-[3px] text-[11px] font-bold", providerPillClasses[pr.provider])}>
+                    {providerLabel[pr.provider]}
+                  </span>
+                </span>
+                <span className="group relative">
+                  <button
+                    className="grid size-7 cursor-pointer place-items-center rounded-md border border-transparent bg-transparent text-[var(--text-muted)] hover:border-[var(--border)] hover:bg-[var(--surface-2)]"
+                    onClick={(event) => event.stopPropagation()}
+                    aria-label="Snooze pull request"
+                    title="Snooze"
+                  >
+                    <Clock3 size={14} />
+                  </button>
+                  <span className="pointer-events-none absolute right-0 top-7 z-10 hidden w-32 rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] p-1 shadow-2xl group-focus-within:pointer-events-auto group-focus-within:block group-hover:pointer-events-auto group-hover:block">
+                    {snoozeOptions.map((option) => (
+                      <button
+                        className="block w-full cursor-pointer rounded-md px-2 py-1.5 text-left text-[12px] text-[var(--text-soft)] hover:bg-[var(--surface-3)] hover:text-[var(--text)]"
+                        key={option.label}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          snoozePullRequest(pr, option);
+                        }}
+                      >
+                        {option.label}
+                      </button>
+                    ))}
+                  </span>
+                </span>
               </span>
               {pr.isDemo && (
                 <span className="w-fit rounded-full border border-[var(--warning-border)] px-[7px] py-0.5 text-[11px] font-bold text-[var(--warning)]">
                   Demo
                 </span>
               )}
-              {pr.viewerRoles && pr.viewerRoles.length > 0 && (
+              {reasons && reasons.length > 0 && (
                 <span className="flex flex-wrap gap-1">
-                  {pr.viewerRoles.map((role) => (
+                  {reasons.map((reason) => (
                     <span
                       className="w-fit rounded-full border border-[var(--border-strong)] px-[7px] py-0.5 text-[11px] font-bold text-[var(--text-soft)]"
-                      key={`${pr.id}-${role}`}
+                      key={`${pr.id}-${reason}`}
                     >
-                      {roleLabels[role]}
+                      {inboxReasonLabels[reason]}
                     </span>
                   ))}
                 </span>
               )}
-              <strong>{pr.title}</strong>
+              <strong className={cn(!unread && "font-semibold text-[var(--text-soft)]")}>{pr.title}</strong>
               <span className="text-[13px] text-[var(--text-muted)]">
                 {pr.repo} #{pr.number}
               </span>
@@ -1011,8 +1093,9 @@ export function App() {
                 <span className="text-[var(--danger)]">-{pr.deletions}</span>
                 <span>{pr.comments} comments</span>
               </span>
-            </button>
-          ))}
+            </article>
+            );
+          })}
         </div>
 
         {isLoading && loadingProviders.length > 0 && (
@@ -1101,6 +1184,23 @@ export function App() {
                 )}
               </div>
               <div className="flex gap-2.5">
+                <div className="group relative">
+                  <button className={controls.ghost}>
+                    <Clock3 size={16} />
+                    Snooze
+                  </button>
+                  <div className="pointer-events-none absolute right-0 top-11 z-10 hidden w-36 rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] p-1 shadow-2xl group-focus-within:pointer-events-auto group-focus-within:block group-hover:pointer-events-auto group-hover:block">
+                    {snoozeOptions.map((option) => (
+                      <button
+                        className="block w-full cursor-pointer rounded-md px-2.5 py-2 text-left text-[13px] text-[var(--text-soft)] hover:bg-[var(--surface-3)] hover:text-[var(--text)]"
+                        key={option.label}
+                        onClick={() => snoozePullRequest(selectedPr, option)}
+                      >
+                        {option.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
                 <button className={controls.ghost}>
                   <PanelLeft size={16} />
                   Files {selectedPr.files.length}
@@ -1154,7 +1254,7 @@ export function App() {
               </h2>
               <p className="m-0">
                 {hasConnectedAccounts
-                  ? "Try a different provider, scope, or search filter."
+                  ? "Try a different provider or search filter."
                   : "Connect GitHub or Bitbucket to review pull requests."}
               </p>
               {hasConnectedAccounts && isFiltered ? (
@@ -1162,9 +1262,7 @@ export function App() {
                   className={controls.primary}
                   onClick={() => {
                     setSelectedProvider("all");
-                    setSelectedScope("reviewer");
                     setQuery("");
-                    void refreshPullRequests(settings, "reviewer");
                   }}
                 >
                   Clear filters

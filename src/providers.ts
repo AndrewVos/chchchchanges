@@ -2,6 +2,7 @@ import { languageFromPath } from "./diff";
 import { appConfig } from "./config";
 import type {
   AccountSettings,
+  PullRequestInboxReason,
   PullRequestSummary,
   ProviderKind,
   PullRequestViewerRole,
@@ -18,6 +19,7 @@ type PullRequestProvider = {
     scope: PullRequestViewerRole,
     options?: LoadOptions,
   ): Promise<PullRequestSummary[]>;
+  loadInboxPullRequests(settings: AccountSettings, options?: LoadOptions): Promise<PullRequestSummary[]>;
   publishComment(comment: ReviewComment): Promise<ReviewComment>;
 };
 
@@ -51,10 +53,16 @@ const oauthConfig = {
 const githubSearchPageSize = 100;
 const githubSearchPageLimit = 10;
 const githubRequestConcurrency = 8;
+const githubInboxQueryConcurrency = 2;
+const githubNotificationPageLimit = 3;
 const bitbucketPullRequestLimit = 1_000;
-const bitbucketReviewerRepoLimit = 75;
+const bitbucketReviewerRepoLimit = 40;
 const bitbucketReviewerPullRequestLimit = 50;
-const bitbucketReviewerRequestConcurrency = 4;
+const bitbucketReviewerRequestConcurrency = 2;
+const bitbucketWatchedPullRequestLimit = 50;
+const providerRateLimitCooldownMs = 10 * 60 * 1000;
+
+const rateLimitCooldownUntil: Partial<Record<ProviderKind, number>> = {};
 
 const dashboardDiff = `@@ -1,13 +1,18 @@
  import { useMemo } from "react";
@@ -177,11 +185,13 @@ const mockPullRequests: PullRequestSummary[] = [
     target: "main",
     targetUrl: "https://github.com/acme/review-hub/tree/main",
     updatedAt: "12 min ago",
+    updatedAtIso: new Date(Date.now() - 12 * 60 * 1000).toISOString(),
     additions: 32,
     deletions: 9,
     comments: 4,
     state: "waiting",
     viewerRoles: ["reviewer"],
+    inboxReasons: ["reviewer"],
     isDemo: true,
     files: [
       {
@@ -216,11 +226,13 @@ const mockPullRequests: PullRequestSummary[] = [
     target: "main",
     targetUrl: "https://github.com/acme/identity/tree/main",
     updatedAt: "42 min ago",
+    updatedAtIso: new Date(Date.now() - 42 * 60 * 1000).toISOString(),
     additions: 18,
     deletions: 7,
     comments: 2,
     state: "changes-requested",
     viewerRoles: ["author"],
+    inboxReasons: ["author"],
     isDemo: true,
     files: [
       {
@@ -247,11 +259,13 @@ const mockPullRequests: PullRequestSummary[] = [
     target: "develop",
     targetUrl: "https://bitbucket.org/platform/pipelines/branch/develop",
     updatedAt: "1 hr ago",
+    updatedAtIso: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
     additions: 16,
     deletions: 5,
     comments: 7,
     state: "commented",
     viewerRoles: ["participant"],
+    inboxReasons: ["watched"],
     isDemo: true,
     files: [
       {
@@ -285,13 +299,52 @@ type GitHubFile = {
   patch?: string;
 };
 type GitHubPull = {
+  number?: number;
+  title?: string;
+  user?: { login: string };
+  html_url?: string;
+  updated_at?: string;
   head: { ref: string; repo?: { html_url?: string } | null };
   base: { ref: string; repo?: { html_url?: string } | null };
   body?: string | null;
-  additions: number;
-  deletions: number;
-  review_comments: number;
+  additions?: number;
+  deletions?: number;
+  comments?: number;
+  review_comments?: number;
+  state?: "open" | "closed";
   draft?: boolean;
+};
+type GitHubRepository = {
+  full_name: string;
+  pulls_url?: string;
+};
+type GitHubNotificationReason =
+  | "approval_requested"
+  | "assign"
+  | "author"
+  | "ci_activity"
+  | "comment"
+  | "invitation"
+  | "manual"
+  | "member_feature_requested"
+  | "mention"
+  | "review_requested"
+  | "security_advisory_credit"
+  | "security_alert"
+  | "state_change"
+  | "subscribed"
+  | "team_mention";
+type GitHubNotification = {
+  id: string;
+  repository: GitHubRepository;
+  subject: {
+    title: string;
+    url?: string;
+    type: string;
+  };
+  reason: GitHubNotificationReason | string;
+  unread: boolean;
+  updated_at: string;
 };
 
 type BitbucketUser = { account_id?: string; nickname?: string; username?: string; display_name?: string; uuid?: string };
@@ -308,6 +361,18 @@ type BitbucketPull = {
   updated_on: string;
   comment_count?: number;
   links?: { diff?: { href?: string }; html?: { href?: string } };
+};
+
+type GitHubPullRequestContext = {
+  headers: HeadersInit;
+  userLogin: string;
+  role: PullRequestViewerRole;
+  inboxReason?: PullRequestInboxReason;
+};
+
+type GitHubPullRequestRef = {
+  repo: string;
+  number: number;
 };
 
 function githubBranchUrl(repoUrl: string | undefined, branch: string) {
@@ -371,6 +436,14 @@ function hasBitbucket(settings: AccountSettings) {
   return getBitbucketConnections(settings).length > 0;
 }
 
+function rateLimitCooldownActive(provider: ProviderKind) {
+  return (rateLimitCooldownUntil[provider] ?? 0) > Date.now();
+}
+
+function startRateLimitCooldown(provider: ProviderKind) {
+  rateLimitCooldownUntil[provider] = Date.now() + providerRateLimitCooldownMs;
+}
+
 function getGitHubConnections(settings: AccountSettings) {
   const connections = [...(settings.githubConnections ?? [])];
   if (settings.githubToken.trim() && !connections.some((connection) => connection.token === settings.githubToken)) {
@@ -432,6 +505,27 @@ function parseGitHubRepo(url: string) {
   return { owner: match[1], repo: match[2], number: Number(match[3]) };
 }
 
+function parseGitHubApiPullRequestRef(url: string | undefined, repo: string): GitHubPullRequestRef | undefined {
+  if (!url) return undefined;
+  const match = url.match(/\/repos\/([^/]+\/[^/]+)\/(?:issues|pulls)\/(\d+)$/);
+  const ref = match ? { repo: match[1], number: Number(match[2]) } : { repo, number: Number(url.split("/").pop()) };
+  return Number.isFinite(ref.number) && ref.number > 0 ? ref : undefined;
+}
+
+function githubNotificationInboxReason(reason: string): PullRequestInboxReason {
+  if (reason === "author") return "author";
+  if (reason === "review_requested" || reason === "approval_requested") return "reviewer";
+  if (reason === "mention" || reason === "team_mention") return "mentioned";
+  return "watched";
+}
+
+function githubNotificationRole(reason: string): PullRequestViewerRole {
+  if (reason === "author") return "author";
+  if (reason === "review_requested" || reason === "approval_requested") return "reviewer";
+  if (reason === "mention" || reason === "team_mention") return "mentioned";
+  return "participant";
+}
+
 async function loadGitHubSearchItems(
   headers: HeadersInit,
   query: string,
@@ -477,6 +571,46 @@ function uniqueRoles(roles: PullRequestViewerRole[]) {
   return [...new Set(roles)];
 }
 
+function uniqueInboxReasons(reasons: PullRequestInboxReason[]) {
+  return [...new Set(reasons)];
+}
+
+function inboxReasonForRole(role: PullRequestViewerRole): PullRequestInboxReason | undefined {
+  if (role === "author" || role === "reviewer" || role === "mentioned") return role;
+  return undefined;
+}
+
+function isInboxReason(value: PullRequestInboxReason | undefined): value is PullRequestInboxReason {
+  return value !== undefined;
+}
+
+function sortPullRequestsByUpdated(pullRequests: PullRequestSummary[]) {
+  return [...pullRequests].sort(
+    (left, right) => new Date(right.updatedAtIso).getTime() - new Date(left.updatedAtIso).getTime(),
+  );
+}
+
+function mergePullRequestSummaries(pullRequests: PullRequestSummary[]) {
+  const pullRequestsById = new Map<string, PullRequestSummary>();
+  for (const pullRequest of pullRequests) {
+    const current = pullRequestsById.get(pullRequest.id);
+    pullRequestsById.set(
+      pullRequest.id,
+      current
+        ? {
+            ...current,
+            ...pullRequest,
+            files: pullRequest.filesLoaded ? pullRequest.files : current.filesLoaded ? current.files : pullRequest.files,
+            filesLoaded: current.filesLoaded || pullRequest.filesLoaded,
+            viewerRoles: uniqueRoles([...(current.viewerRoles ?? []), ...(pullRequest.viewerRoles ?? [])]),
+            inboxReasons: uniqueInboxReasons([...(current.inboxReasons ?? []), ...(pullRequest.inboxReasons ?? [])]),
+          }
+        : pullRequest,
+    );
+  }
+  return sortPullRequestsByUpdated([...pullRequestsById.values()]);
+}
+
 function sameBitbucketUser(left: BitbucketUser | undefined, right: BitbucketUser | undefined) {
   if (!left || !right) return false;
   if (left.uuid && right.uuid && left.uuid === right.uuid) return true;
@@ -492,6 +626,7 @@ function toBitbucketPullRequestSummary(
   user: BitbucketUser,
   workspace: string,
   roleHints: PullRequestViewerRole[] = [],
+  inboxReasonHints: PullRequestInboxReason[] = [],
 ): PullRequestSummary {
   const repo = bitbucketRepoFromPull(pull, workspace);
   const repoWorkspace = repo.workspace?.slug ?? repo.full_name.split("/")[0];
@@ -501,6 +636,10 @@ function toBitbucketPullRequestSummary(
   if (pull.participants?.some((participant) => sameBitbucketUser(participant.user, user))) {
     viewerRoles.push("participant");
   }
+  const inboxReasons = uniqueInboxReasons([
+    ...inboxReasonHints,
+    ...viewerRoles.map(inboxReasonForRole).filter(isInboxReason),
+  ]);
   return {
     id: `bitbucket-${repo.full_name}-${pull.id}`,
     provider: "bitbucket" as const,
@@ -515,11 +654,13 @@ function toBitbucketPullRequestSummary(
     target: pull.destination?.branch?.name ?? "target",
     targetUrl: bitbucketBranchUrl(repo, pull.destination?.branch?.name),
     updatedAt: formatDate(pull.updated_on),
+    updatedAtIso: pull.updated_on,
     additions: 0,
     deletions: 0,
     comments: pull.comment_count ?? 0,
     state: "waiting" as const,
     viewerRoles: uniqueRoles(viewerRoles),
+    inboxReasons,
     filesLoaded: false,
     connectionId: workspace,
     files: [
@@ -582,17 +723,27 @@ async function loadGitHubPullRequestsForToken(
   const user = await requestJson<GitHubUser>("https://api.github.com/user", { headers });
   reportProgress(1, 0);
   const roleQueries: Array<{ role: PullRequestViewerRole; query: string }> = [
-    { role: "participant", query: `is:pr is:open involves:${user.login}` },
     { role: "author", query: `is:pr is:open author:${user.login}` },
-    { role: "reviewer", query: `is:pr is:open review-requested:${user.login}` },
-    { role: "assignee", query: `is:pr is:open assignee:${user.login}` },
-    { role: "mentioned", query: `is:pr is:open mentions:${user.login}` },
   ];
   const roleQuery = roleQueries.find(({ role }) => role === scope);
   if (!roleQuery) return [];
 
+  return loadGitHubQueryPullRequests(
+    roleQuery.query,
+    { headers, userLogin: user.login, role: roleQuery.role, inboxReason: inboxReasonForRole(roleQuery.role) },
+    options,
+    reportProgress,
+  );
+}
+
+async function loadGitHubQueryPullRequests(
+  query: string,
+  context: GitHubPullRequestContext,
+  options: LoadOptions = {},
+  reportProgress: ProgressReporter = () => {},
+): Promise<PullRequestSummary[]> {
   const pullRequests: PullRequestSummary[] = [];
-  await loadGitHubSearchItems(headers, roleQuery.query, async (items) => {
+  await loadGitHubSearchItems(context.headers, query, async (items) => {
     const pageItems = items.filter((entry) => entry.pull_request);
     reportProgress(0, pageItems.length);
     const pagePullRequests = await mapWithConcurrency(pageItems, githubRequestConcurrency, async (item) => {
@@ -602,7 +753,7 @@ async function loadGitHubPullRequestsForToken(
         return null;
       }
       const baseUrl = `https://api.github.com/repos/${repoRef.owner}/${repoRef.repo}/pulls/${repoRef.number}`;
-      const pull = await requestJson<GitHubPull>(baseUrl, { headers });
+      const pull = await requestJson<GitHubPull>(baseUrl, { headers: context.headers });
       reportProgress(1, 0);
       return {
         id: `github-${repoRef.owner}-${repoRef.repo}-${repoRef.number}`,
@@ -618,17 +769,19 @@ async function loadGitHubPullRequestsForToken(
         target: pull.base.ref,
         targetUrl: githubBranchUrl(pull.base.repo?.html_url, pull.base.ref),
         updatedAt: formatDate(item.updated_at),
-        additions: pull.additions,
-        deletions: pull.deletions,
-        comments: item.comments + pull.review_comments,
+        updatedAtIso: item.updated_at,
+        additions: pull.additions ?? 0,
+        deletions: pull.deletions ?? 0,
+        comments: item.comments + (pull.review_comments ?? 0),
         state: "waiting" as const,
-        viewerRoles: [roleQuery.role],
+        viewerRoles: [context.role],
+        inboxReasons: context.inboxReason ? [context.inboxReason] : [],
         filesLoaded: false,
-        connectionId: user.login,
+        connectionId: context.userLogin,
         files: [
           toFile("pullrequest.diff", "GitHub file changes will load when this pull request is selected.", {
-            additions: pull.additions,
-            deletions: pull.deletions,
+            additions: pull.additions ?? 0,
+            deletions: pull.deletions ?? 0,
             diffUrl: `${baseUrl}/files`,
           }),
         ],
@@ -640,6 +793,169 @@ async function loadGitHubPullRequestsForToken(
   }, reportProgress);
 
   return pullRequests;
+}
+
+async function loadGitHubNotifications(
+  headers: HeadersInit,
+  reportProgress: ProgressReporter,
+): Promise<GitHubNotification[]> {
+  const notifications: GitHubNotification[] = [];
+  for (let page = 1; page <= githubNotificationPageLimit; page += 1) {
+    reportProgress(0, 1);
+    const items = await requestJson<GitHubNotification[]>(
+      `https://api.github.com/notifications?all=true&participating=false&per_page=50&page=${page}`,
+      { headers },
+    );
+    reportProgress(1, 0);
+    notifications.push(...items);
+    if (items.length < 50) break;
+  }
+  return notifications;
+}
+
+async function loadGitHubPullRequestFromRef(
+  ref: GitHubPullRequestRef,
+  context: GitHubPullRequestContext,
+  reportProgress: ProgressReporter,
+): Promise<PullRequestSummary[]> {
+  const baseUrl = `https://api.github.com/repos/${ref.repo}/pulls/${ref.number}`;
+  reportProgress(0, 1);
+  const pull = await requestJson<GitHubPull>(baseUrl, { headers: context.headers });
+  reportProgress(1, 0);
+  if (pull.state && pull.state !== "open") {
+    return [];
+  }
+  const updatedAtIso = pull.updated_at ?? new Date().toISOString();
+  const number = pull.number ?? ref.number;
+  return [
+    {
+      id: `github-${ref.repo.replace("/", "-")}-${number}`,
+      provider: "github" as const,
+      repo: ref.repo,
+      number,
+      title: pull.title ?? `Pull request #${number}`,
+      description: pull.body?.trim() || undefined,
+      url: pull.html_url,
+      author: pull.user?.login ?? "unknown",
+      branch: pull.head.ref,
+      branchUrl: githubBranchUrl(pull.head.repo?.html_url, pull.head.ref),
+      target: pull.base.ref,
+      targetUrl: githubBranchUrl(pull.base.repo?.html_url, pull.base.ref),
+      updatedAt: formatDate(updatedAtIso),
+      updatedAtIso,
+      additions: pull.additions ?? 0,
+      deletions: pull.deletions ?? 0,
+      comments: (pull.comments ?? 0) + (pull.review_comments ?? 0),
+      state: "waiting" as const,
+      viewerRoles: [context.role],
+      inboxReasons: context.inboxReason ? [context.inboxReason] : [],
+      filesLoaded: false,
+      connectionId: context.userLogin,
+      files: [
+        toFile("pullrequest.diff", "GitHub file changes will load when this pull request is selected.", {
+          additions: pull.additions ?? 0,
+          deletions: pull.deletions ?? 0,
+          diffUrl: `${baseUrl}/files`,
+        }),
+      ],
+    },
+  ];
+}
+
+async function loadGitHubInboxPullRequestsForToken(
+  token: string,
+  options: LoadOptions = {},
+  reportProgress: ProgressReporter = () => {},
+): Promise<PullRequestSummary[]> {
+  const headers = githubHeaders(token);
+  reportProgress(0, 1);
+  const user = await requestJson<GitHubUser>("https://api.github.com/user", { headers });
+  reportProgress(1, 0);
+  const context = (role: PullRequestViewerRole, reason: PullRequestInboxReason) => ({
+    headers,
+    userLogin: user.login,
+    role,
+    inboxReason: reason,
+  });
+  const roleQueries: Array<{ role: PullRequestViewerRole; reason: PullRequestInboxReason; query: string }> = [
+    { role: "author", reason: "author", query: `is:pr is:open author:${user.login}` },
+  ];
+  const roleGroups = await mapWithConcurrency(
+    roleQueries,
+    githubInboxQueryConcurrency,
+    async (item) => {
+      try {
+        return await loadGitHubQueryPullRequests(item.query, context(item.role, item.reason), options, reportProgress);
+      } catch (error) {
+        if (!isRateLimited(error)) throw error;
+        startRateLimitCooldown("github");
+        options.onWarning?.("GitHub rate-limited inbox loading. Showing the pull requests found so far.");
+        return [];
+      }
+    },
+  );
+
+  let notifications: GitHubNotification[] = [];
+  if (rateLimitCooldownActive("github")) {
+    options.onWarning?.("GitHub recently rate-limited notification loading. Skipping GitHub notifications for a few minutes.");
+  } else {
+    try {
+      notifications = await loadGitHubNotifications(headers, reportProgress);
+    } catch (error) {
+      if (!isRateLimited(error)) throw error;
+      startRateLimitCooldown("github");
+      options.onWarning?.("GitHub rate-limited notification loading. Showing authored pull requests only for now.");
+    }
+  }
+  const notificationRefs = notifications
+    .filter((notification) => notification.subject.type === "PullRequest")
+    .map((notification) => ({
+      notification,
+      ref: parseGitHubApiPullRequestRef(notification.subject.url, notification.repository.full_name),
+    }))
+    .filter((item): item is { notification: GitHubNotification; ref: GitHubPullRequestRef } => item.ref !== undefined);
+  const notificationGroups = await mapWithConcurrency(notificationRefs, githubInboxQueryConcurrency, async ({ notification, ref }) => {
+    try {
+      const items = await loadGitHubPullRequestFromRef(
+        ref,
+        context(githubNotificationRole(notification.reason), githubNotificationInboxReason(notification.reason)),
+        reportProgress,
+      );
+      const updatedItems = items.map((item) => ({
+        ...item,
+        title: item.title || notification.subject.title,
+        updatedAt: formatDate(notification.updated_at),
+        updatedAtIso: notification.updated_at,
+      }));
+      options.onPullRequests?.(updatedItems);
+      return updatedItems;
+    } catch (error) {
+      if (!isRateLimited(error)) throw error;
+      startRateLimitCooldown("github");
+      options.onWarning?.("GitHub rate-limited notification PR loading. Showing the pull requests found so far.");
+      return [];
+    }
+  });
+  return mergePullRequestSummaries([...roleGroups.flat(), ...notificationGroups.flat()]);
+}
+
+async function loadGitHubInboxPullRequests(
+  settings: AccountSettings,
+  options: LoadOptions = {},
+): Promise<PullRequestSummary[]> {
+  const connections = getGitHubConnections(settings);
+  if (connections.length === 0) return [];
+  let completed = 0;
+  let total = 0;
+  const reportProgress: ProgressReporter = (completedDelta = 0, totalDelta = 0) => {
+    completed += completedDelta;
+    total += totalDelta;
+    options.onProgress?.({ provider: "github", completed, total: Math.max(total, completed, 1) });
+  };
+  const groups = await Promise.all(
+    connections.map((connection) => loadGitHubInboxPullRequestsForToken(connection.token, options, reportProgress)),
+  );
+  return mergePullRequestSummaries(groups.flat());
 }
 
 function bitbucketHeadersForToken(token: string): HeadersInit {
@@ -654,7 +970,7 @@ function isUnauthorized(error: unknown) {
 }
 
 function isRateLimited(error: unknown) {
-  return error instanceof Error && /^429\b/.test(error.message);
+  return error instanceof Error && (/^429\b/.test(error.message) || /^403\b.*rate limit/i.test(error.message));
 }
 
 async function refreshBitbucketConnection(connection: BitbucketConnection) {
@@ -764,11 +1080,11 @@ async function loadBitbucketAuthoredPullRequests(
     bitbucketPullRequestLimit,
     (items) =>
       options.onPullRequests?.(
-        items.map((pull) => toBitbucketPullRequestSummary(pull, user, connection.workspace, ["author"])),
+        items.map((pull) => toBitbucketPullRequestSummary(pull, user, connection.workspace, ["author"], ["author"])),
       ),
     reportProgress,
   );
-  return pulls.map((pull) => toBitbucketPullRequestSummary(pull, user, connection.workspace, ["author"]));
+  return pulls.map((pull) => toBitbucketPullRequestSummary(pull, user, connection.workspace, ["author"], ["author"]));
 }
 
 async function loadBitbucketReviewerRepositories(
@@ -795,10 +1111,14 @@ async function loadBitbucketReviewerPullRequests(
   user: BitbucketUser,
   options: LoadOptions = {},
   reportProgress: ProgressReporter = () => {},
+  repositorySlugs?: string[],
 ): Promise<PullRequestSummary[]> {
   const reviewerQuery = bitbucketReviewerQuery(user);
   if (!reviewerQuery) return [];
-  const repos = (await loadBitbucketReviewerRepositories(connection, reportProgress)).slice(0, bitbucketReviewerRepoLimit);
+  const repos = (repositorySlugs ?? (await loadBitbucketReviewerRepositories(connection, reportProgress))).slice(
+    0,
+    bitbucketReviewerRepoLimit,
+  );
   if (repos.length === 0) return [];
 
   let rateLimited = false;
@@ -821,13 +1141,14 @@ async function loadBitbucketReviewerPullRequests(
         bitbucketReviewerPullRequestLimit,
         (items) =>
           options.onPullRequests?.(
-            items.map((pull) => toBitbucketPullRequestSummary(pull, user, connection.workspace, ["reviewer"])),
+            items.map((pull) => toBitbucketPullRequestSummary(pull, user, connection.workspace, ["reviewer"], ["reviewer"])),
           ),
         reportRepoProgress,
       );
     } catch (error) {
       if (isRateLimited(error)) {
         rateLimited = true;
+        startRateLimitCooldown("bitbucket");
         if (firstPage) reportProgress(1, 0);
         if (!warned) {
           warned = true;
@@ -840,7 +1161,62 @@ async function loadBitbucketReviewerPullRequests(
   });
 
   const pulls = pullGroups.flat();
-  return pulls.map((pull) => toBitbucketPullRequestSummary(pull, user, connection.workspace, ["reviewer"]));
+  return pulls.map((pull) => toBitbucketPullRequestSummary(pull, user, connection.workspace, ["reviewer"], ["reviewer"]));
+}
+
+async function loadBitbucketWatchedPullRequests(
+  connection: BitbucketConnection,
+  user: BitbucketUser,
+  options: LoadOptions = {},
+  reportProgress: ProgressReporter = () => {},
+  repositorySlugs?: string[],
+): Promise<PullRequestSummary[]> {
+  const repos = (repositorySlugs ?? (await loadBitbucketReviewerRepositories(connection, reportProgress))).slice(
+    0,
+    bitbucketReviewerRepoLimit,
+  );
+  if (repos.length === 0) return [];
+
+  let rateLimited = false;
+  let warned = false;
+  reportProgress(0, repos.length);
+  const pullGroups = await mapWithConcurrency(repos, bitbucketReviewerRequestConcurrency, async (repo) => {
+    if (rateLimited) return [];
+    let firstPage = true;
+    const reportRepoProgress: ProgressReporter = (completedDelta = 0, totalDelta = 0) => {
+      if (totalDelta > 0 && firstPage) return;
+      reportProgress(completedDelta, totalDelta);
+      if (completedDelta > 0) firstPage = false;
+    };
+    try {
+      return loadBitbucketPage<BitbucketPull>(
+        `https://api.bitbucket.org/2.0/repositories/${connection.workspace}/${repo}/pullrequests?state=OPEN&sort=-updated_on&pagelen=50`,
+        connection,
+        bitbucketWatchedPullRequestLimit,
+        (items) =>
+          options.onPullRequests?.(
+            items.map((pull) => toBitbucketPullRequestSummary(pull, user, connection.workspace, [], ["watched"])),
+          ),
+        reportRepoProgress,
+      );
+    } catch (error) {
+      if (isRateLimited(error)) {
+        rateLimited = true;
+        startRateLimitCooldown("bitbucket");
+        if (firstPage) reportProgress(1, 0);
+        if (!warned) {
+          warned = true;
+          options.onWarning?.("Bitbucket rate-limited watched repo PR loading. Showing the pull requests found so far.");
+        }
+        return [];
+      }
+      throw error;
+    }
+  });
+
+  return pullGroups
+    .flat()
+    .map((pull) => toBitbucketPullRequestSummary(pull, user, connection.workspace, [], ["watched"]));
 }
 
 async function loadBitbucketWorkspacePullRequests(
@@ -863,23 +1239,58 @@ async function loadBitbucketWorkspacePullRequests(
       ? loadBitbucketReviewerPullRequests(connection, user, options, reportProgress)
       : Promise.resolve([]),
   ]);
-  const pullRequestsById = new Map<string, PullRequestSummary>();
-  for (const pullRequest of [...authoredPullRequests, ...reviewerPullRequests]) {
-    const current = pullRequestsById.get(pullRequest.id);
-    pullRequestsById.set(
-      pullRequest.id,
-      current
-        ? {
-            ...current,
-            viewerRoles: uniqueRoles([...(current.viewerRoles ?? []), ...(pullRequest.viewerRoles ?? [])]),
-          }
-        : pullRequest,
-    );
+  return mergePullRequestSummaries([...authoredPullRequests, ...reviewerPullRequests]);
+}
+
+async function loadBitbucketWorkspaceInboxPullRequests(
+  connection: BitbucketConnection,
+  options: LoadOptions = {},
+  reportProgress: ProgressReporter = () => {},
+): Promise<PullRequestSummary[]> {
+  reportProgress(0, 1);
+  const user = await requestBitbucketJson<BitbucketUser>("https://api.bitbucket.org/2.0/user", connection);
+  reportProgress(1, 0);
+  const selectedUser = bitbucketSelectedUser(user);
+  if (!selectedUser) throw new Error("Bitbucket did not return a usable current user ID.");
+  let repositorySlugs: string[] = [];
+  if (rateLimitCooldownActive("bitbucket")) {
+    options.onWarning?.("Bitbucket recently rate-limited inbox loading. Skipping watched repositories for a few minutes.");
+  } else {
+    try {
+      repositorySlugs = await loadBitbucketReviewerRepositories(connection, reportProgress);
+    } catch (error) {
+      if (!isRateLimited(error)) throw error;
+      startRateLimitCooldown("bitbucket");
+      options.onWarning?.("Bitbucket rate-limited repository discovery. Showing authored pull requests only for now.");
+    }
   }
 
-  return [...pullRequestsById.values()].sort(
-    (left, right) => new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime(),
+  const [authoredPullRequests, watchedPullRequests] = await Promise.all([
+    loadBitbucketAuthoredPullRequests(connection, user, selectedUser, options, reportProgress),
+    repositorySlugs.length > 0
+      ? loadBitbucketWatchedPullRequests(connection, user, options, reportProgress, repositorySlugs)
+      : Promise.resolve([]),
+  ]);
+  return mergePullRequestSummaries([...authoredPullRequests, ...watchedPullRequests]);
+}
+
+async function loadBitbucketInboxPullRequests(
+  settings: AccountSettings,
+  options: LoadOptions = {},
+): Promise<PullRequestSummary[]> {
+  const connections = getBitbucketConnections(settings);
+  if (connections.length === 0) return [];
+  let completed = 0;
+  let total = 0;
+  const reportProgress: ProgressReporter = (completedDelta = 0, totalDelta = 0) => {
+    completed += completedDelta;
+    total += totalDelta;
+    options.onProgress?.({ provider: "bitbucket", completed, total: Math.max(total, completed, 1) });
+  };
+  const groups = await Promise.all(
+    connections.map((connection) => loadBitbucketWorkspaceInboxPullRequests(connection, options, reportProgress)),
   );
+  return mergePullRequestSummaries(groups.flat());
 }
 
 export async function loadPullRequestFiles(
@@ -946,6 +1357,9 @@ export const providers: PullRequestProvider[] = [
     async loadPullRequests(settings, scope, options) {
       return loadGitHubPullRequests(settings, scope, options);
     },
+    async loadInboxPullRequests(settings, options) {
+      return loadGitHubInboxPullRequests(settings, options);
+    },
     async publishComment(comment) {
       return { ...comment, pending: false };
     },
@@ -956,6 +1370,9 @@ export const providers: PullRequestProvider[] = [
     color: "#7dd3fc",
     async loadPullRequests(settings, scope, options) {
       return loadBitbucketPullRequests(settings, scope, options);
+    },
+    async loadInboxPullRequests(settings, options) {
+      return loadBitbucketInboxPullRequests(settings, options);
     },
     async publishComment(comment) {
       return { ...comment, pending: false };
@@ -978,6 +1395,33 @@ export async function loadAllPullRequests(
     providers.map((provider) => provider.loadPullRequests(workingSettings, scope, options)),
   );
   const pullRequests = settled.flatMap((item) => (item.status === "fulfilled" ? item.value : []));
+  const errors = settled.flatMap((item, index) =>
+    item.status === "rejected" ? [`${providers[index].label}: ${item.reason instanceof Error ? item.reason.message : "failed"}`] : [],
+  );
+  return {
+    pullRequests,
+    errors,
+    usingDemo: false,
+    updatedSettings: JSON.stringify(workingSettings) === JSON.stringify(settings) ? undefined : workingSettings,
+  };
+}
+
+export async function loadInboxPullRequests(
+  settings: AccountSettings,
+  options: LoadOptions = {},
+): Promise<LoadResult> {
+  const workingSettings = structuredClone(settings);
+  const hasAnyAccount = hasGitHub(workingSettings) || hasBitbucket(workingSettings);
+  if (!hasAnyAccount) {
+    return { pullRequests: [], errors: [], usingDemo: false };
+  }
+
+  const settled = await Promise.allSettled(
+    providers.map((provider) => provider.loadInboxPullRequests(workingSettings, options)),
+  );
+  const pullRequests = mergePullRequestSummaries(
+    settled.flatMap((item) => (item.status === "fulfilled" ? item.value : [])),
+  );
   const errors = settled.flatMap((item, index) =>
     item.status === "rejected" ? [`${providers[index].label}: ${item.reason instanceof Error ? item.reason.message : "failed"}`] : [],
   );
