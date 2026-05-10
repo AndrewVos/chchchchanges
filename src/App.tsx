@@ -8,6 +8,7 @@ import python from "highlight.js/lib/languages/python";
 import css from "highlight.js/lib/languages/css";
 import json from "highlight.js/lib/languages/json";
 import {
+  Archive,
   CheckCircle2,
   CheckSquare2,
   ChevronDown,
@@ -99,7 +100,9 @@ type ProviderProgressState = Record<ProviderKind, { completed: number; total: nu
 type InboxState = {
   readAtByPrId: Record<string, string>;
   snoozedUntilByPrId: Record<string, string>;
+  archivedAtByPrId: Record<string, string>;
 };
+type SidebarFilter = ProviderKind | "all" | "archived";
 type SnoozeOption = { label: string; milliseconds: number };
 
 const snoozeOptions: SnoozeOption[] = [
@@ -186,9 +189,11 @@ function loadInboxState(): InboxState {
         stored.snoozedUntilByPrId && typeof stored.snoozedUntilByPrId === "object"
           ? stored.snoozedUntilByPrId
           : {},
+      archivedAtByPrId:
+        stored.archivedAtByPrId && typeof stored.archivedAtByPrId === "object" ? stored.archivedAtByPrId : {},
     };
   } catch {
-    return { readAtByPrId: {}, snoozedUntilByPrId: {} };
+    return { readAtByPrId: {}, snoozedUntilByPrId: {}, archivedAtByPrId: {} };
   }
 }
 
@@ -398,7 +403,7 @@ function relativeTime(value: string) {
 
 export function App() {
   const [pullRequests, setPullRequests] = useState<PullRequestSummary[]>([]);
-  const [selectedProvider, setSelectedProvider] = useState<ProviderKind | "all">("all");
+  const [selectedProvider, setSelectedProvider] = useState<SidebarFilter>("all");
   const [selectedPrId, setSelectedPrId] = useState<string>("");
   const [query, setQuery] = useState("");
   const [comments, setComments] = useState<ReviewComment[]>(initialComments);
@@ -688,17 +693,20 @@ export function App() {
   const visiblePullRequests = useMemo(() => {
     return pullRequests.filter((pr) => {
       const openMatch = pr.state !== "merged" && pr.state !== "closed";
+      const archived = Boolean(inboxState.archivedAtByPrId[pr.id]);
       const providerMatch = selectedProvider === "all" || pr.provider === selectedProvider;
       const snoozedUntil = inboxState.snoozedUntilByPrId[pr.id];
       const snoozed = snoozedUntil ? new Date(snoozedUntil).getTime() > now : false;
       const textMatch = `${pr.title} ${pr.repo} ${pr.author}`.toLowerCase().includes(query.toLowerCase());
-      return openMatch && providerMatch && !snoozed && textMatch;
+      if (selectedProvider === "archived") return openMatch && archived && textMatch;
+      return openMatch && providerMatch && !archived && !snoozed && textMatch;
     });
-  }, [inboxState.snoozedUntilByPrId, now, pullRequests, query, selectedProvider]);
+  }, [inboxState.archivedAtByPrId, inboxState.snoozedUntilByPrId, now, pullRequests, query, selectedProvider]);
   const providerCounts = useMemo(() => {
     return pullRequests.reduce(
       (counts, pr) => {
         if (pr.state === "merged" || pr.state === "closed") return counts;
+        if (inboxState.archivedAtByPrId[pr.id]) return counts;
         const snoozedUntil = inboxState.snoozedUntilByPrId[pr.id];
         const snoozed = snoozedUntil ? new Date(snoozedUntil).getTime() > now : false;
         if (!snoozed) counts[pr.provider] += 1;
@@ -706,8 +714,15 @@ export function App() {
       },
       { github: 0, bitbucket: 0 } satisfies Record<ProviderKind, number>,
     );
-  }, [inboxState.snoozedUntilByPrId, now, pullRequests]);
+  }, [inboxState.archivedAtByPrId, inboxState.snoozedUntilByPrId, now, pullRequests]);
   const totalProviderCount = providerCounts.github + providerCounts.bitbucket;
+  const archivedCount = useMemo(
+    () =>
+      pullRequests.filter(
+        (pr) => pr.state !== "merged" && pr.state !== "closed" && inboxState.archivedAtByPrId[pr.id],
+      ).length,
+    [inboxState.archivedAtByPrId, pullRequests],
+  );
   const connectedProviders = useMemo(
     () => ({
       github: settings.githubConnections.length > 0,
@@ -735,6 +750,7 @@ export function App() {
   const selectedPr = visiblePullRequests.find((pr) => pr.id === selectedPrId) ?? visiblePullRequests[0];
   const selectedFilesLoading = Boolean(selectedPr && loadingFileIds.has(selectedPr.id));
   const selectedDescription = selectedPr?.description?.trim() ?? "";
+  const selectedPrArchived = Boolean(selectedPr && inboxState.archivedAtByPrId[selectedPr.id]);
   const hasConnectedAccounts = settings.githubConnections.length > 0 || settings.bitbucketConnections.length > 0;
   const isFiltered = selectedProvider !== "all" || query.trim().length > 0;
   const markdownComponents = useMemo<Components>(
@@ -918,6 +934,24 @@ export function App() {
     }
   }
 
+  function toggleArchivePullRequest(pr: PullRequestSummary) {
+    const archived = Boolean(inboxState.archivedAtByPrId[pr.id]);
+    setInboxState((current) => {
+      const archivedAtByPrId = { ...current.archivedAtByPrId };
+      if (archived) {
+        delete archivedAtByPrId[pr.id];
+      } else {
+        archivedAtByPrId[pr.id] = new Date().toISOString();
+      }
+      return { ...current, archivedAtByPrId };
+    });
+    showToast(`${archived ? "Unarchived" : "Archived"} ${pr.repo} #${pr.number}.`);
+    if (selectedPrId === pr.id) {
+      const nextPr = visiblePullRequests.find((item) => item.id !== pr.id);
+      setSelectedPrId(nextPr?.id ?? "");
+    }
+  }
+
   async function addComment(file: ReviewFile, line: DiffLine) {
     if (!selectedPr || !draft.trim()) return;
     const lineKey = getCommentLineKey(file.path, line);
@@ -1002,7 +1036,7 @@ export function App() {
           />
         </div>
 
-        <div className="grid grid-cols-3 gap-1.5 rounded-lg bg-[var(--surface-3)] p-[5px]" aria-label="Provider filter">
+        <div className="grid grid-cols-4 gap-1.5 rounded-lg bg-[var(--surface-3)] p-[5px]" aria-label="Provider filter">
           <button
             className={filterButtonClasses(selectedProvider === "all")}
             onClick={() => setSelectedProvider("all")}
@@ -1018,6 +1052,12 @@ export function App() {
               {provider.label} <span className="text-[var(--text-muted)]">{providerCounts[provider.kind]}</span>
             </button>
           ))}
+          <button
+            className={filterButtonClasses(selectedProvider === "archived")}
+            onClick={() => setSelectedProvider("archived")}
+          >
+            Archived <span className="text-[var(--text-muted)]">{archivedCount}</span>
+          </button>
         </div>
 
         <div className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-auto pr-0.5">
@@ -1031,18 +1071,15 @@ export function App() {
               role="button"
               tabIndex={0}
               className={cn(
-                "grid w-full cursor-pointer grid-cols-[10px_minmax(0,1fr)] gap-3 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-3.5 text-left text-[var(--text-card)] outline-none",
+                "w-full cursor-pointer rounded-lg border border-[var(--border)] bg-[var(--surface)] p-3.5 text-left text-[var(--text-card)] outline-none",
                 selectedPr?.id === pr.id && "border-[var(--accent)] bg-[var(--surface-4)]",
-                unread && "border-[var(--border-strong)]",
+                unread && "border-[var(--border-strong)] shadow-[inset_3px_0_0_var(--accent)]",
               )}
               onClick={() => selectPullRequest(pr)}
               onKeyDown={(event) => {
                 if (event.key === "Enter" || event.key === " ") selectPullRequest(pr);
               }}
             >
-              <span className="flex h-full min-h-[92px] items-center justify-center">
-                {unread && <span className="size-2 rounded-full bg-[var(--accent)]" aria-label="Unread" />}
-              </span>
               <span className="flex min-w-0 flex-col gap-2">
                 <span className="flex min-w-0 items-center justify-between gap-3 text-[13px] text-[var(--text-muted)]">
                   <span className="min-w-0 truncate">
@@ -1118,6 +1155,10 @@ export function App() {
                 <span className="min-w-0 truncate">{selectedPr.repo}</span>
               </div>
               <div className="flex shrink-0 gap-2.5">
+                <button className={controls.ghost} onClick={() => toggleArchivePullRequest(selectedPr)}>
+                  <Archive size={16} />
+                  {selectedPrArchived ? "Unarchive" : "Archive"}
+                </button>
                 <div className="group relative">
                   <button className={controls.ghost}>
                     <Clock3 size={16} />
