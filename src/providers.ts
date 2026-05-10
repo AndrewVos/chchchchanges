@@ -379,6 +379,7 @@ type BitbucketPull = {
   participants?: Array<{ user?: BitbucketUser }>;
   source?: { repository?: BitbucketRepo; branch?: { name?: string } };
   destination?: { repository?: BitbucketRepo; branch?: { name?: string } };
+  rendered?: { description?: { raw?: string; markup?: string; html?: string } };
   summary?: { raw?: string; markup?: string; html?: string };
   updated_on: string;
   comment_count?: number;
@@ -704,13 +705,14 @@ function toBitbucketPullRequestSummary(
     ...inboxReasonHints,
     ...viewerRoles.map(inboxReasonForRole).filter(isInboxReason),
   ]);
+  const description = pull.rendered?.description?.raw?.trim() || pull.summary?.raw?.trim() || undefined;
   return {
     id: `bitbucket-${repo.full_name}-${pull.id}`,
     provider: "bitbucket" as const,
     repo: repo.full_name,
     number: pull.id,
     title: pull.title,
-    description: pull.summary?.raw?.trim() || undefined,
+    description,
     url: pull.links?.html?.href ?? `https://bitbucket.org/${repoWorkspace}/${repo.slug}/pull-requests/${pull.id}`,
     author: pull.author?.display_name ?? pull.author?.nickname ?? "unknown",
     branch: pull.source?.branch?.name ?? "source",

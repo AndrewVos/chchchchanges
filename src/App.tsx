@@ -175,6 +175,30 @@ function filterButtonClasses(active: boolean) {
   );
 }
 
+function normalizeMarkdownDescription(description: string) {
+  return description
+    .replace(/<img\b([^>]*?)\bsrc=(["'])(.*?)\2([^>]*)>/gi, (_, before: string, _quote: string, src: string, after: string) => {
+      const alt = [...`${before} ${after}`.matchAll(/\balt=(["'])(.*?)\1/gi)].at(0)?.[2] ?? "";
+      return `![${alt}](${src})`;
+    })
+    .replace(/^\s*\{:\s*[^}]*\}\s*$/gm, "")
+    .trim();
+}
+
+function resolveMarkdownAssetUrl(src: string | undefined, pullRequest: PullRequestSummary | undefined) {
+  if (!src) return undefined;
+  if (/^(?:https?:|data:|blob:)/i.test(src)) return src;
+  if (src.startsWith("//")) return `https:${src}`;
+  if (!pullRequest?.url) return src;
+
+  try {
+    const baseUrl = pullRequest.url.endsWith("/") ? pullRequest.url : `${pullRequest.url}/`;
+    return new URL(src, baseUrl).toString();
+  } catch {
+    return src;
+  }
+}
+
 function loadThemePreference(): ThemePreference {
   const stored = localStorage.getItem("reviewDesk.theme");
   return stored === "light" || stored === "dark" || stored === "system" ? stored : "system";
@@ -750,7 +774,7 @@ export function App() {
 
   const selectedPr = visiblePullRequests.find((pr) => pr.id === selectedPrId) ?? visiblePullRequests[0];
   const selectedFilesLoading = Boolean(selectedPr && loadingFileIds.has(selectedPr.id));
-  const selectedDescription = selectedPr?.description?.trim() ?? "";
+  const selectedDescription = selectedPr?.description ? normalizeMarkdownDescription(selectedPr.description) : "";
   const selectedPrArchived = Boolean(selectedPr && inboxState.archivedAtByPrId[selectedPr.id]);
   const hasConnectedAccounts = settings.githubConnections.length > 0 || settings.bitbucketConnections.length > 0;
   const isFiltered = selectedProvider !== "all" || query.trim().length > 0;
@@ -803,7 +827,13 @@ export function App() {
         return <h4 className="mb-1.5 mt-2.5 text-[15px] font-bold text-[var(--text)]">{children}</h4>;
       },
       img({ alt, src }) {
-        return <img alt={alt ?? ""} className="my-2 max-w-full rounded-lg border border-[var(--border)]" src={src} />;
+        return (
+          <img
+            alt={alt ?? ""}
+            className="my-2 max-w-full rounded-lg border border-[var(--border)]"
+            src={resolveMarkdownAssetUrl(src, selectedPr)}
+          />
+        );
       },
       hr() {
         return <hr className="my-3 border-[var(--border)]" />;
@@ -855,7 +885,7 @@ export function App() {
         return <ul className="my-2 ml-5 list-disc text-[var(--text-soft)]">{children}</ul>;
       },
     }),
-    [],
+    [selectedPr],
   );
 
   useEffect(() => {
