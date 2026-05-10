@@ -408,6 +408,7 @@ export function App() {
   const [query, setQuery] = useState("");
   const [comments, setComments] = useState<ReviewComment[]>(initialComments);
   const [activeLineKey, setActiveLineKey] = useState<string | null>(null);
+  const [snoozeMenuOpen, setSnoozeMenuOpen] = useState(false);
   const [draft, setDraft] = useState("");
   const [settings, setSettings] = useState<AccountSettings>(loadStoredSettings);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -909,6 +910,7 @@ export function App() {
   function selectPullRequest(pr: PullRequestSummary) {
     setSelectedPrId(pr.id);
     setActiveLineKey(null);
+    setSnoozeMenuOpen(false);
     setDraft("");
     setInboxState((current) => ({
       ...current,
@@ -923,6 +925,7 @@ export function App() {
 
   function snoozePullRequest(pr: PullRequestSummary, option: SnoozeOption) {
     const snoozedUntil = new Date(Date.now() + option.milliseconds).toISOString();
+    setSnoozeMenuOpen(false);
     setInboxState((current) => ({
       ...current,
       snoozedUntilByPrId: { ...current.snoozedUntilByPrId, [pr.id]: snoozedUntil },
@@ -1159,22 +1162,30 @@ export function App() {
                   <Archive size={16} />
                   {selectedPrArchived ? "Unarchive" : "Archive"}
                 </button>
-                <div className="group relative">
-                  <button className={controls.ghost}>
+                <div className="relative">
+                  <button
+                    className={controls.ghost}
+                    onClick={() => setSnoozeMenuOpen((open) => !open)}
+                    aria-expanded={snoozeMenuOpen}
+                    aria-haspopup="menu"
+                  >
                     <Clock3 size={16} />
                     Snooze
                   </button>
-                  <div className="pointer-events-none absolute right-0 top-11 z-10 hidden w-36 rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] p-1 shadow-2xl group-focus-within:pointer-events-auto group-focus-within:block group-hover:pointer-events-auto group-hover:block">
+                  {snoozeMenuOpen && (
+                  <div className="absolute right-0 top-11 z-10 w-36 rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] p-1 shadow-2xl">
                     {snoozeOptions.map((option) => (
                       <button
                         className="block w-full cursor-pointer rounded-md px-2.5 py-2 text-left text-[13px] text-[var(--text-soft)] hover:bg-[var(--surface-3)] hover:text-[var(--text)]"
                         key={option.label}
                         onClick={() => snoozePullRequest(selectedPr, option)}
+                        role="menuitem"
                       >
                         {option.label}
                       </button>
                     ))}
                   </div>
+                  )}
                 </div>
                 <button className={controls.success}>
                   <CheckCircle2 size={16} />
