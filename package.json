@@ -1,6 +1,6 @@
 {
   "name": "chchchchanges",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Desktop pull request review app for GitHub and Bitbucket.",
   "main": "dist-electron/main.js",
   "scripts": {
